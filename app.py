@@ -41,7 +41,6 @@ def gerar_pdf_atendimento(cliente_nome, categoria, status, orcamento, fechado, d
     pdf.set_font("Arial", "", 10)
     pdf.multi_cell(0, 6, descricao if descricao else "Sem descrição informada.")
 
-    # Retorna os bytes diretamente sem usar parâmetros descontinuados
     return bytes(pdf.output())
 
 def gerar_pdf_tabela(titulo, df):
@@ -63,7 +62,6 @@ def gerar_pdf_tabela(titulo, df):
             pdf.cell(38, 6, val[:18], border=1)
         pdf.ln()
 
-    # Retorna os bytes diretamente
     return bytes(pdf.output())
 
 # ==========================================
@@ -229,8 +227,9 @@ st.set_page_config(page_title="Sistema de Gestão Conslin", layout="wide")
 
 if tela_login():
     user = st.session_state["usuario_logado"]
+    perfil_usuario = user.get("perfil", "Atendente")
     
-    st.sidebar.markdown(f"👤 **{user['nome']}**  \n*(Perfil: {user['perfil']})*")
+    st.sidebar.markdown(f"👤 **{user['nome']}**  \n*(Perfil: **{perfil_usuario}**)*")
     if st.sidebar.button("🚪 Sair / Logout"):
         st.session_state["usuario_logado"] = None
         st.rerun()
@@ -242,22 +241,35 @@ if tela_login():
 
     st.title("🏗️ Conslin - Gestão Operacional & Financeira")
 
-    opcoes_menu = [
-        "Dashboard & Metas",
-        "Cadastro de Clientes",
-        "Novo Atendimento / Orçamento",
-        "Gestão de Atendimentos",
-        "Prestadores & Fornecedores",
-        "Contas a Pagar, Dívidas & Acordos",
-        "Registrar Pagamentos",
-        "Fluxo de Caixa & DRE",
-        "⚙️ Gerenciar Usuários"
-    ]
+    # ----------------------------------------------------
+    # DEFINIÇÃO DE PERMISSÕES DE MENUS POR PERFIL
+    # ----------------------------------------------------
+    menus_por_perfil = {
+        "Atendente": [
+            "Dashboard & Metas",
+            "Cadastro de Clientes",
+            "Novo Atendimento / Orçamento",
+            "Gestão de Atendimentos"
+        ],
+        "Admin": [
+            "Dashboard & Metas",
+            "Cadastro de Clientes",
+            "Novo Atendimento / Orçamento",
+            "Gestão de Atendimentos",
+            "Prestadores & Fornecedores",
+            "Contas a Pagar, Dívidas & Acordos",
+            "Registrar Pagamentos",
+            "Fluxo de Caixa & DRE",
+            "⚙️ Gerenciar Usuários"
+        ]
+    }
 
+    # Carrega opções disponíveis para o perfil logado
+    opcoes_menu = menus_por_perfil.get(perfil_usuario, menus_por_perfil["Atendente"])
     menu = st.sidebar.radio("Navegação", opcoes_menu)
 
     # ----------------------------------------------------
-    # DASHBOARD & METAS
+    # DASHBOARD & METAS (Disponível para todos)
     # ----------------------------------------------------
     if menu == "Dashboard & Metas":
         st.header("🎯 Painel de Metas e Desempenho por Categoria")
@@ -266,21 +278,23 @@ if tela_login():
         df_metas = pd.read_sql_query("SELECT * FROM metas", conn)
         conn.close()
 
-        with st.expander("⚙️ Ajustar Metas de Venda por Categoria"):
-            with st.form("form_metas"):
-                novas_metas = {}
-                for cat in CATEGORIAS:
-                    meta_atual = float(df_metas[df_metas['categoria'] == cat]['meta_valor'].values[0]) if not df_metas.empty and cat in df_metas['categoria'].values else 0.0
-                    novas_metas[cat] = st.number_input(f"Meta para {cat} (R$)", value=meta_atual, step=500.0)
-                if st.form_submit_button("Salvar Metas"):
-                    conn = conectar()
-                    cursor = conn.cursor()
-                    for cat, valor in novas_metas.items():
-                        cursor.execute("UPDATE metas SET meta_valor = ? WHERE categoria = ?", (valor, cat))
-                    conn.commit()
-                    conn.close()
-                    st.success("Metas atualizadas com sucesso!")
-                    st.rerun()
+        # Apenas Admin pode alterar metas
+        if perfil_usuario == "Admin":
+            with st.expander("⚙️ Ajustar Metas de Venda por Categoria"):
+                with st.form("form_metas"):
+                    novas_metas = {}
+                    for cat in CATEGORIAS:
+                        meta_atual = float(df_metas[df_metas['categoria'] == cat]['meta_valor'].values[0]) if not df_metas.empty and cat in df_metas['categoria'].values else 0.0
+                        novas_metas[cat] = st.number_input(f"Meta para {cat} (R$)", value=meta_atual, step=500.0)
+                    if st.form_submit_button("Salvar Metas"):
+                        conn = conectar()
+                        cursor = conn.cursor()
+                        for cat, valor in novas_metas.items():
+                            cursor.execute("UPDATE metas SET meta_valor = ? WHERE categoria = ?", (valor, cat))
+                        conn.commit()
+                        conn.close()
+                        st.success("Metas atualizadas com sucesso!")
+                        st.rerun()
 
         st.subheader("Atingimento de Metas (Serviços Aprovados / Concluídos)")
         cols = st.columns(len(CATEGORIAS))
@@ -416,238 +430,280 @@ if tela_login():
                         st.rerun()
 
     # ----------------------------------------------------
-    # PRESTADORES, EQUIPE E FORNECEDORES
+    # PRESTADORES, EQUIPE E FORNECEDORES (ADMIN)
     # ----------------------------------------------------
     elif menu == "Prestadores & Fornecedores":
-        st.header("👷 Cadastrar Prestadores, Equipe e Fornecedores")
-        with st.form("form_parceiro"):
-            nome = st.text_input("Nome / Razão Social *")
-            tipo = st.selectbox("Tipo de Cadastro", TIPOS_PARCEIROS)
-            telefone = st.text_input("Telefone / WhatsApp")
-            cpf_cnpj = st.text_input("CPF ou CNPJ")
-            chave_pix = st.text_input("Chave PIX / Dados Bancários")
-            observacao = st.text_area("Observações (Especialidade, Condições, etc.)")
-            if st.form_submit_button("Cadastrar"):
-                if nome:
-                    conn = conectar()
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                    INSERT INTO parceiros (nome, tipo, telefone, cpf_cnpj, chave_pix, observacao)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """, (nome, tipo, telefone, cpf_cnpj, chave_pix, observacao))
-                    conn.commit()
-                    conn.close()
-                    st.success(f"{tipo} '{nome}' cadastrado com sucesso!")
-                else:
-                    st.error("O campo Nome é obrigatório.")
+        if perfil_usuario != "Admin":
+            st.error("🚫 Acesso não autorizado para o seu perfil.")
+        else:
+            st.header("👷 Cadastrar Prestadores, Equipe e Fornecedores")
+            with st.form("form_parceiro"):
+                nome = st.text_input("Nome / Razão Social *")
+                tipo = st.selectbox("Tipo de Cadastro", TIPOS_PARCEIROS)
+                telefone = st.text_input("Telefone / WhatsApp")
+                cpf_cnpj = st.text_input("CPF ou CNPJ")
+                chave_pix = st.text_input("Chave PIX / Dados Bancários")
+                observacao = st.text_area("Observações (Especialidade, Condições, etc.)")
+                if st.form_submit_button("Cadastrar"):
+                    if nome:
+                        conn = conectar()
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                        INSERT INTO parceiros (nome, tipo, telefone, cpf_cnpj, chave_pix, observacao)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """, (nome, tipo, telefone, cpf_cnpj, chave_pix, observacao))
+                        conn.commit()
+                        conn.close()
+                        st.success(f"{tipo} '{nome}' cadastrado com sucesso!")
+                    else:
+                        st.error("O campo Nome é obrigatório.")
 
-        st.subheader("Lista de Prestadores, Equipe e Fornecedores")
-        conn = conectar()
-        df_parceiros = pd.read_sql_query("SELECT * FROM parceiros", conn)
-        conn.close()
-        st.dataframe(df_parceiros, use_container_width=True)
+            st.subheader("Lista de Prestadores, Equipe e Fornecedores")
+            conn = conectar()
+            df_parceiros = pd.read_sql_query("SELECT * FROM parceiros", conn)
+            conn.close()
+            st.dataframe(df_parceiros, use_container_width=True)
 
     # ----------------------------------------------------
-    # CONTAS A PAGAR (COM EXPORTAÇÃO PDF)
+    # CONTAS A PAGAR (ADMIN)
     # ----------------------------------------------------
     elif menu == "Contas a Pagar, Dívidas & Acordos":
-        st.header("💸 Contas a Pagar, Dívidas e Acordos")
-        conn = conectar()
-        df_parceiros = pd.read_sql_query("SELECT id, nome, tipo FROM parceiros", conn)
-        conn.close()
-
-        if df_parceiros.empty:
-            st.warning("Cadastre primeiro um Prestador, Integrante da Equipe ou Fornecedor.")
+        if perfil_usuario != "Admin":
+            st.error("🚫 Acesso não autorizado para o seu perfil.")
         else:
-            opcoes_parceiros = {f"{row['nome']} ({row['tipo']} - ID: {row['id']})": row['id'] for _, row in df_parceiros.iterrows()}
-            
-            with st.form("form_contas"):
-                parceiro_sel = st.selectbox("Selecione o Beneficiário / Credor", list(opcoes_parceiros.keys()))
-                tipo_conta = st.selectbox("Tipo de Lançamento", TIPOS_CONTAS)
-                descricao = st.text_input("Descrição (ex: Material de Construção, Mão de Obra, Parcela Acordo #1)")
-                valor = st.number_input("Valor (R$)", min_value=0.01, step=50.0)
-                data_vencimento = st.date_input("Data de Vencimento")
-                status = st.selectbox("Status", ["Pendente", "Acordado / Parcelado", "Pago"])
+            st.header("💸 Contas a Pagar, Dívidas e Acordos")
+            conn = conectar()
+            df_parceiros = pd.read_sql_query("SELECT id, nome, tipo FROM parceiros", conn)
+            conn.close()
+
+            if df_parceiros.empty:
+                st.warning("Cadastre primeiro um Prestador, Integrante da Equipe ou Fornecedor.")
+            else:
+                opcoes_parceiros = {f"{row['nome']} ({row['tipo']} - ID: {row['id']})": row['id'] for _, row in df_parceiros.iterrows()}
                 
-                if st.form_submit_button("Lançar Conta"):
-                    parceiro_id = opcoes_parceiros[parceiro_sel]
-                    conn = conectar()
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                    INSERT INTO contas_pagar (parceiro_id, descricao, tipo_conta, valor, data_vencimento, status)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """, (parceiro_id, descricao, tipo_conta, valor, str(data_vencimento), status))
-                    conn.commit()
-                    conn.close()
-                    st.success("Lançamento registrado com sucesso!")
+                with st.form("form_contas"):
+                    parceiro_sel = st.selectbox("Selecione o Beneficiário / Credor", list(opcoes_parceiros.keys()))
+                    tipo_conta = st.selectbox("Tipo de Lançamento", TIPOS_CONTAS)
+                    descricao = st.text_input("Descrição (ex: Material de Construção, Mão de Obra, Parcela Acordo #1)")
+                    valor = st.number_input("Valor (R$)", min_value=0.01, step=50.0)
+                    data_vencimento = st.date_input("Data de Vencimento")
+                    status = st.selectbox("Status", ["Pendente", "Acordado / Parcelado", "Pago"])
+                    
+                    if st.form_submit_button("Lançar Conta"):
+                        parceiro_id = opcoes_parceiros[parceiro_sel]
+                        conn = conectar()
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                        INSERT INTO contas_pagar (parceiro_id, descricao, tipo_conta, valor, data_vencimento, status)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """, (parceiro_id, descricao, tipo_conta, valor, str(data_vencimento), status))
+                        conn.commit()
+                        conn.close()
+                        st.success("Lançamento registrado com sucesso!")
 
-        st.subheader("📋 Relação de Contas a Pagar e Dívidas")
-        conn = conectar()
-        query = """
-        SELECT cp.id, p.nome as Credor, cp.tipo_conta as Tipo, cp.descricao as Descrição, 
-               cp.valor as [Valor (R$)], cp.data_vencimento as Vencimento, cp.status as Status
-        FROM contas_pagar cp
-        LEFT JOIN parceiros p ON cp.parceiro_id = p.id
-        """
-        df_contas = pd.read_sql_query(query, conn)
-        conn.close()
+            st.subheader("📋 Relação de Contas a Pagar e Dívidas")
+            conn = conectar()
+            query = """
+            SELECT cp.id, p.nome as Credor, cp.tipo_conta as Tipo, cp.descricao as Descrição, 
+                   cp.valor as [Valor (R$)], cp.data_vencimento as Vencimento, cp.status as Status
+            FROM contas_pagar cp
+            LEFT JOIN parceiros p ON cp.parceiro_id = p.id
+            """
+            df_contas = pd.read_sql_query(query, conn)
+            conn.close()
 
-        if not df_contas.empty:
-            st.dataframe(df_contas, use_container_width=True)
-            pendentes = df_contas[df_contas['Status'] != 'Pago']['Valor (R$)'].sum()
-            st.warning(f"⚠️ Total Pendente / Em Aberto em Dívidas e Contas: **R$ {pendentes:,.2f}**")
-            
-            pdf_contas = gerar_pdf_tabela("Relatorio de Contas a Pagar - Conslin", df_contas[['Credor', 'Tipo', 'Valor (R$)', 'Vencimento', 'Status']])
-            st.download_button("📄 Baixar Relatório de Contas (PDF)", data=pdf_contas, file_name="contas_a_pagar.pdf", mime="application/pdf")
+            if not df_contas.empty:
+                st.dataframe(df_contas, use_container_width=True)
+                pendentes = df_contas[df_contas['Status'] != 'Pago']['Valor (R$)'].sum()
+                st.warning(f"⚠️ Total Pendente / Em Aberto em Dívidas e Contas: **R$ {pendentes:,.2f}**")
+                
+                pdf_contas = gerar_pdf_tabela("Relatorio de Contas a Pagar - Conslin", df_contas[['Credor', 'Tipo', 'Valor (R$)', 'Vencimento', 'Status']])
+                st.download_button("📄 Baixar Relatório de Contas (PDF)", data=pdf_contas, file_name="contas_a_pagar.pdf", mime="application/pdf")
 
     # ----------------------------------------------------
-    # REGISTRAR PAGAMENTOS
+    # REGISTRAR PAGAMENTOS (ADMIN)
     # ----------------------------------------------------
     elif menu == "Registrar Pagamentos":
-        st.header("💳 Registrar Pagamento Efetuado")
-        conn = conectar()
-        query = """
-        SELECT cp.id, p.nome as Credor, cp.descricao, cp.valor, cp.data_vencimento, cp.parceiro_id
-        FROM contas_pagar cp
-        LEFT JOIN parceiros p ON cp.parceiro_id = p.id
-        WHERE cp.status != 'Pago'
-        """
-        df_pendentes = pd.read_sql_query(query, conn)
-        conn.close()
-
-        if df_pendentes.empty:
-            st.info("Não há contas pendentes para pagamento no momento.")
+        if perfil_usuario != "Admin":
+            st.error("🚫 Acesso não autorizado para o seu perfil.")
         else:
-            opcoes_contas = {
-                f"ID {row['id']} - {row['Credor']} - {row['descricao']} - R$ {row['valor']:,.2f} (Venc: {row['data_vencimento']})": row
-                for _, row in df_pendentes.iterrows()
-            }
-            conta_sel = st.selectbox("Selecione a Conta / Dívida a ser Paga", list(opcoes_contas.keys()))
-            dados_conta = opcoes_contas[conta_sel]
+            st.header("💳 Registrar Pagamento Efetuado")
+            conn = conectar()
+            query = """
+            SELECT cp.id, p.nome as Credor, cp.descricao, cp.valor, cp.data_vencimento, cp.parceiro_id
+            FROM contas_pagar cp
+            LEFT JOIN parceiros p ON cp.parceiro_id = p.id
+            WHERE cp.status != 'Pago'
+            """
+            df_pendentes = pd.read_sql_query(query, conn)
+            conn.close()
 
-            with st.form("form_pagamento"):
-                valor_pago = st.number_input("Valor Pago (R$)", value=float(dados_conta['valor']), step=10.0)
-                forma_pagamento = st.selectbox("Forma de Pagamento", ["PIX", "Transferência Bancária", "Dinheiro", "Boleto", "Cartão"])
-                comprovante = st.text_input("Referência / N° Comprovante / Obs")
-                data_pagamento = st.date_input("Data do Pagamento")
+            if df_pendentes.empty:
+                st.info("Não há contas pendentes para pagamento no momento.")
+            else:
+                opcoes_contas = {
+                    f"ID {row['id']} - {row['Credor']} - {row['descricao']} - R$ {row['valor']:,.2f} (Venc: {row['data_vencimento']})": row
+                    for _, row in df_pendentes.iterrows()
+                }
+                conta_sel = st.selectbox("Selecione a Conta / Dívida a ser Paga", list(opcoes_contas.keys()))
+                dados_conta = opcoes_contas[conta_sel]
 
-                if st.form_submit_button("Confirmar Pagamento"):
-                    conn = conectar()
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                    INSERT INTO pagamentos (conta_id, parceiro_id, valor_pago, data_pagamento, forma_pagamento, comprovante_ref)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """, (dados_conta['id'], dados_conta['parceiro_id'], valor_pago, str(data_pagamento), forma_pagamento, comprovante))
-                    
-                    if valor_pago >= dados_conta['valor']:
-                        cursor.execute("UPDATE contas_pagar SET status = 'Pago' WHERE id = ?", (dados_conta['id'],))
-                    else:
-                        novo_valor = dados_conta['valor'] - valor_pago
-                        cursor.execute("UPDATE contas_pagar SET valor = ? WHERE id = ?", (novo_valor, dados_conta['id']))
+                with st.form("form_pagamento"):
+                    valor_pago = st.number_input("Valor Pago (R$)", value=float(dados_conta['valor']), step=10.0)
+                    forma_pagamento = st.selectbox("Forma de Pagamento", ["PIX", "Transferência Bancária", "Dinheiro", "Boleto", "Cartão"])
+                    comprovante = st.text_input("Referência / N° Comprovante / Obs")
+                    data_pagamento = st.date_input("Data do Pagamento")
 
-                    conn.commit()
-                    conn.close()
-                    st.success("Pagamento registrado com sucesso!")
-                    st.rerun()
+                    if st.form_submit_button("Confirmar Pagamento"):
+                        conn = conectar()
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                        INSERT INTO pagamentos (conta_id, parceiro_id, valor_pago, data_pagamento, forma_pagamento, comprovante_ref)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """, (dados_conta['id'], dados_conta['parceiro_id'], valor_pago, str(data_pagamento), forma_pagamento, comprovante))
+                        
+                        if valor_pago >= dados_conta['valor']:
+                            cursor.execute("UPDATE contas_pagar SET status = 'Pago' WHERE id = ?", (dados_conta['id'],))
+                        else:
+                            novo_valor = dados_conta['valor'] - valor_pago
+                            cursor.execute("UPDATE contas_pagar SET valor = ? WHERE id = ?", (novo_valor, dados_conta['id']))
 
-        st.subheader("📜 Histórico de Pagamentos Realizados")
-        conn = conectar()
-        query_hist = """
-        SELECT pg.id, p.nome as Beneficiário, pg.valor_pago as [Valor Pago (R$)], 
-               pg.data_pagamento as Data, pg.forma_pagamento as Forma, pg.comprovante_ref as Observação
-        FROM pagamentos pg
-        LEFT JOIN parceiros p ON pg.parceiro_id = p.id
-        """
-        df_hist = pd.read_sql_query(query_hist, conn)
-        conn.close()
-        st.dataframe(df_hist, use_container_width=True)
+                        conn.commit()
+                        conn.close()
+                        st.success("Pagamento registrado com sucesso!")
+                        st.rerun()
+
+            st.subheader("📜 Histórico de Pagamentos Realizados")
+            conn = conectar()
+            query_hist = """
+            SELECT pg.id, p.nome as Beneficiário, pg.valor_pago as [Valor Pago (R$)], 
+                   pg.data_pagamento as Data, pg.forma_pagamento as Forma, pg.comprovante_ref as Observação
+            FROM pagamentos pg
+            LEFT JOIN parceiros p ON pg.parceiro_id = p.id
+            """
+            df_hist = pd.read_sql_query(query_hist, conn)
+            conn.close()
+            st.dataframe(df_hist, use_container_width=True)
 
     # ----------------------------------------------------
-    # FLUXO DE CAIXA & DRE
+    # FLUXO DE CAIXA & DRE (ADMIN)
     # ----------------------------------------------------
     elif menu == "Fluxo de Caixa & DRE":
-        st.header("💰 Resumo de Entradas, Saídas e Lucratividade")
-        conn = conectar()
-        df_atendimentos = pd.read_sql_query("SELECT SUM(valor_fechado) as entradas FROM atendimentos WHERE status IN ('Aprovado / Execução', 'Concluído')", conn)
-        df_saidas = pd.read_sql_query("SELECT SUM(valor_pago) as pagamentos_efetuados FROM pagamentos", conn)
-        df_pendentes = pd.read_sql_query("SELECT SUM(valor) as pendencias FROM contas_pagar WHERE status != 'Pago'", conn)
-        conn.close()
+        if perfil_usuario != "Admin":
+            st.error("🚫 Acesso não autorizado para o seu perfil.")
+        else:
+            st.header("💰 Resumo de Entradas, Saídas e Lucratividade")
+            conn = conectar()
+            df_atendimentos = pd.read_sql_query("SELECT SUM(valor_fechado) as entradas FROM atendimentos WHERE status IN ('Aprovado / Execução', 'Concluído')", conn)
+            df_saidas = pd.read_sql_query("SELECT SUM(valor_pago) as pagamentos_efetuados FROM pagamentos", conn)
+            df_pendentes = pd.read_sql_query("SELECT SUM(valor) as pendencias FROM contas_pagar WHERE status != 'Pago'", conn)
+            conn.close()
 
-        total_entradas = df_atendimentos['entradas'].values[0] if df_atendimentos['entradas'].values[0] else 0.0
-        total_pagos = df_saidas['pagamentos_efetuados'].values[0] if df_saidas['pagamentos_efetuados'].values[0] else 0.0
-        total_pendencias = df_pendentes['pendencias'].values[0] if df_pendentes['pendencias'].values[0] else 0.0
+            total_entradas = df_atendimentos['entradas'].values[0] if df_atendimentos['entradas'].values[0] else 0.0
+            total_pagos = df_saidas['pagamentos_efetuados'].values[0] if df_saidas['pagamentos_efetuados'].values[0] else 0.0
+            total_pendencias = df_pendentes['pendencias'].values[0] if df_pendentes['pendencias'].values[0] else 0.0
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total Entradas (Vendas)", f"R$ {total_entradas:,.2f}")
-        col2.metric("Total Saídas (Pagas)", f"R$ {total_pagos:,.2f}")
-        col3.metric("Contas a Pagar (Aberto)", f"R$ {total_pendencias:,.2f}")
-        col4.metric("Saldo do Exercício", f"R$ {(total_entradas - total_pagos):,.2f}")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Total Entradas (Vendas)", f"R$ {total_entradas:,.2f}")
+            col2.metric("Total Saídas (Pagas)", f"R$ {total_pagos:,.2f}")
+            col3.metric("Contas a Pagar (Aberto)", f"R$ {total_pendencias:,.2f}")
+            col4.metric("Saldo do Exercício", f"R$ {(total_entradas - total_pagos):,.2f}")
 
     # ----------------------------------------------------
     # GERENCIAR USUÁRIOS E SENHAS
     # ----------------------------------------------------
     elif menu == "⚙️ Gerenciar Usuários":
-        st.header("⚙️ Gestão de Usuários e Permissões")
-        
-        tab_cadastrar, tab_listar, tab_minha_senha = st.tabs(["➕ Novo Usuário", "👥 Usuários Cadastrados", "🔑 Alterar Minha Senha"])
+        if perfil_usuario != "Admin":
+            st.error("🚫 Acesso não autorizado para o seu perfil.")
+        else:
+            st.header("⚙️ Gestão de Usuários e Permissões")
+            
+            tab_cadastrar, tab_listar, tab_alterar_perfil, tab_minha_senha = st.tabs([
+                "➕ Novo Usuário", 
+                "👥 Usuários Cadastrados", 
+                "🛠️ Alterar Perfil de Acesso",
+                "🔑 Alterar Minha Senha"
+            ])
 
-        with tab_cadastrar:
-            with st.form("form_novo_usuario"):
-                st.subheader("Cadastrar Novo Acesso")
-                nome_novo = st.text_input("Nome Completo / Pessoa")
-                login_novo = st.text_input("Nome de Usuário (login)").strip().lower()
-                senha_nova = st.text_input("Senha", type="password")
-                perfil_novo = st.selectbox("Perfil de Acesso", ["Admin", "Atendente"])
-                
-                if st.form_submit_button("Cadastrar Usuário"):
-                    if nome_novo and login_novo and senha_nova:
-                        conn = conectar()
-                        cursor = conn.cursor()
-                        try:
-                            cursor.execute("""
-                            INSERT INTO usuarios (nome, usuario, senha_hash, perfil)
-                            VALUES (?, ?, ?, ?)
-                            """, (nome_novo, login_novo, gerar_hash_senha(senha_nova), perfil_novo))
-                            conn.commit()
-                            st.success(f"Usuário **{login_novo}** cadastrado com sucesso!")
-                        except sqlite3.IntegrityError:
-                            st.error("Este nome de usuário já existe. Escolha outro.")
-                        finally:
-                            conn.close()
-                    else:
-                        st.error("Preencha todos os campos obrigatórios.")
-
-        with tab_listar:
-            st.subheader("Lista de Acessos ao Sistema")
-            conn = conectar()
-            df_users = pd.read_sql_query("SELECT id, nome, usuario, perfil FROM usuarios", conn)
-            conn.close()
-            st.dataframe(df_users, use_container_width=True)
-
-        with tab_minha_senha:
-            st.subheader("Alterar Minha Senha de Acesso")
-            with st.form("form_alterar_senha"):
-                senha_atual = st.text_input("Senha Atual", type="password")
-                nova_senha = st.text_input("Nova Senha", type="password")
-                confirma_senha = st.text_input("Confirmar Nova Senha", type="password")
-                
-                if st.form_submit_button("Atualizar Senha"):
-                    if nova_senha != confirma_senha:
-                        st.error("A nova senha e a confirmação não coincidem.")
-                    elif len(nova_senha) < 4:
-                        st.error("A nova senha deve ter pelo menos 4 caracteres.")
-                    else:
-                        conn = conectar()
-                        cursor = conn.cursor()
-                        cursor.execute("SELECT senha_hash FROM usuarios WHERE id = ?", (user['id'],))
-                        hash_atual = cursor.fetchone()[0]
-                        
-                        if verificar_senha_hash(senha_atual, hash_atual):
-                            nova_hash = gerar_hash_senha(nova_senha)
-                            cursor.execute("UPDATE usuarios SET senha_hash = ? WHERE id = ?", (nova_hash, user['id']))
-                            conn.commit()
-                            conn.close()
-                            st.success("Sua senha foi alterada com sucesso!")
+            with tab_cadastrar:
+                with st.form("form_novo_usuario"):
+                    st.subheader("Cadastrar Novo Acesso")
+                    nome_novo = st.text_input("Nome Completo / Pessoa")
+                    login_novo = st.text_input("Nome de Usuário (login)").strip().lower()
+                    senha_nova = st.text_input("Senha", type="password")
+                    perfil_novo = st.selectbox("Perfil de Acesso", ["Atendente", "Admin"])
+                    
+                    if st.form_submit_button("Cadastrar Usuário"):
+                        if nome_novo and login_novo and senha_nova:
+                            conn = conectar()
+                            cursor = conn.cursor()
+                            try:
+                                cursor.execute("""
+                                INSERT INTO usuarios (nome, usuario, senha_hash, perfil)
+                                VALUES (?, ?, ?, ?)
+                                """, (nome_novo, login_novo, gerar_hash_senha(senha_nova), perfil_novo))
+                                conn.commit()
+                                st.success(f"Usuário **{login_novo}** cadastrado como **{perfil_novo}**!")
+                            except sqlite3.IntegrityError:
+                                st.error("Este nome de usuário já existe. Escolha outro.")
+                            finally:
+                                conn.close()
                         else:
+                            st.error("Preencha todos os campos obrigatórios.")
+
+            with tab_listar:
+                st.subheader("Lista de Acessos ao Sistema")
+                conn = conectar()
+                df_users = pd.read_sql_query("SELECT id, nome, usuario, perfil FROM usuarios", conn)
+                conn.close()
+                st.dataframe(df_users, use_container_width=True)
+
+            with tab_alterar_perfil:
+                st.subheader("Alterar Permissões de Usuários Existentes")
+                conn = conectar()
+                df_users = pd.read_sql_query("SELECT id, usuario, perfil FROM usuarios", conn)
+                conn.close()
+
+                if not df_users.empty:
+                    mapa_usuarios = {f"{row['usuario']} (Atual: {row['perfil']})": (row['id'], row['perfil']) for _, row in df_users.iterrows()}
+                    user_selecionado = st.selectbox("Selecione o Usuário", list(mapa_usuarios.keys()))
+                    user_id, perfil_atual = mapa_usuarios[user_selecionado]
+
+                    with st.form("form_mudar_perfil"):
+                        novo_perfil = st.selectbox("Novo Perfil", ["Atendente", "Admin"], index=0 if perfil_atual == "Atendente" else 1)
+                        if st.form_submit_button("Atualizar Perfil"):
+                            conn = conectar()
+                            cursor = conn.cursor()
+                            cursor.execute("UPDATE usuarios SET perfil = ? WHERE id = ?", (novo_perfil, user_id))
+                            conn.commit()
                             conn.close()
-                            st.error("Sua senha atual está incorreta.")
+                            st.success("Perfil atualizado com sucesso! As alterações entram em vigor no próximo login do usuário.")
+                            st.rerun()
+
+            with tab_minha_senha:
+                st.subheader("Alterar Minha Senha de Acesso")
+                with st.form("form_alterar_senha"):
+                    senha_atual = st.text_input("Senha Atual", type="password")
+                    nova_senha = st.text_input("Nova Senha", type="password")
+                    confirma_senha = st.text_input("Confirmar Nova Senha", type="password")
+                    
+                    if st.form_submit_button("Atualizar Senha"):
+                        if nova_senha != confirma_senha:
+                            st.error("A nova senha e a confirmação não coincidem.")
+                        elif len(nova_senha) < 4:
+                            st.error("A nova senha deve ter pelo menos 4 caracteres.")
+                        else:
+                            conn = conectar()
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT senha_hash FROM usuarios WHERE id = ?", (user['id'],))
+                            hash_atual = cursor.fetchone()[0]
+                            
+                            if verificar_senha_hash(senha_atual, hash_atual):
+                                nova_hash = gerar_hash_senha(nova_senha)
+                                cursor.execute("UPDATE usuarios SET senha_hash = ? WHERE id = ?", (nova_hash, user['id']))
+                                conn.commit()
+                                conn.close()
+                                st.success("Sua senha foi alterada com sucesso!")
+                            else:
+                                conn.close()
+                                st.error("Sua senha atual está incorreta.")
