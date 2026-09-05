@@ -3,10 +3,9 @@ import pandas as pd
 import sqlite3
 import hashlib
 from fpdf import FPDF
-import io
 
 # ==========================================
-# FUNÇÃO PARA GERAR PDF EM MEMÓRIA
+# FUNÇÃO PARA GERAR PDF EM MEMÓRIA (fpdf2)
 # ==========================================
 class PDFRelatorio(FPDF):
     def header(self):
@@ -26,7 +25,7 @@ def gerar_pdf_atendimento(cliente_nome, categoria, status, orcamento, fechado, d
     pdf.add_page()
     
     pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, f"Detalhamento do Atendimento / Orçamento", ln=True)
+    pdf.cell(0, 8, "Detalhamento do Atendimento / Orçamento", ln=True)
     pdf.ln(3)
 
     pdf.set_font("Arial", "", 10)
@@ -42,8 +41,8 @@ def gerar_pdf_atendimento(cliente_nome, categoria, status, orcamento, fechado, d
     pdf.set_font("Arial", "", 10)
     pdf.multi_cell(0, 6, descricao if descricao else "Sem descrição informada.")
 
-    # Retorna o PDF em formato de bytes para download no Streamlit
-    return pdf.output(dest='S').encode('latin-1', errors='replace')
+    # Retorna os bytes diretamente sem usar parâmetros descontinuados
+    return bytes(pdf.output())
 
 def gerar_pdf_tabela(titulo, df):
     pdf = PDFRelatorio()
@@ -64,7 +63,8 @@ def gerar_pdf_tabela(titulo, df):
             pdf.cell(38, 6, val[:18], border=1)
         pdf.ln()
 
-    return pdf.output(dest='S').encode('latin-1', errors='replace')
+    # Retorna os bytes diretamente
+    return bytes(pdf.output())
 
 # ==========================================
 # FUNÇÕES DE CRIPTOGRAFIA DE SENHA
@@ -382,7 +382,6 @@ if tela_login():
         else:
             st.dataframe(df_atendimentos, use_container_width=True)
 
-            # Botão para exportar relatório geral em PDF
             pdf_bytes = gerar_pdf_tabela("Relatorio de Atendimentos - Conslin", df_atendimentos[['id', 'Cliente', 'Categoria', 'Status', 'Fechado (R$)']])
             st.download_button("📄 Gerar PDF de Todos os Atendimentos", data=pdf_bytes, file_name="atendimentos_conslin.pdf", mime="application/pdf")
 
@@ -395,7 +394,6 @@ if tela_login():
                 reg = registro.iloc[0]
                 st.write(f"Editando atendimento do cliente: **{reg['Cliente']}**")
                 
-                # Gerar PDF do Atendimento Específico
                 pdf_ind = gerar_pdf_atendimento(reg['Cliente'], reg['Categoria'], reg['Status'], float(reg['Orçado (R$)']), float(reg['Fechado (R$)']), reg['Descrição'])
                 st.download_button(f"📥 Baixar Orçamento/PDF (ID #{reg['id']})", data=pdf_ind, file_name=f"orcamento_atendimento_{reg['id']}.pdf", mime="application/pdf")
 
@@ -499,7 +497,6 @@ if tela_login():
             pendentes = df_contas[df_contas['Status'] != 'Pago']['Valor (R$)'].sum()
             st.warning(f"⚠️ Total Pendente / Em Aberto em Dívidas e Contas: **R$ {pendentes:,.2f}**")
             
-            # Download de PDF das Contas
             pdf_contas = gerar_pdf_tabela("Relatorio de Contas a Pagar - Conslin", df_contas[['Credor', 'Tipo', 'Valor (R$)', 'Vencimento', 'Status']])
             st.download_button("📄 Baixar Relatório de Contas (PDF)", data=pdf_contas, file_name="contas_a_pagar.pdf", mime="application/pdf")
 
@@ -546,7 +543,7 @@ if tela_login():
                         cursor.execute("UPDATE contas_pagar SET status = 'Pago' WHERE id = ?", (dados_conta['id'],))
                     else:
                         novo_valor = dados_conta['valor'] - valor_pago
-                        cursor.execute("UPDATE contas_pagar SET valor = ? WHERE id = ?", (dados_conta['id'],))
+                        cursor.execute("UPDATE contas_pagar SET valor = ? WHERE id = ?", (novo_valor, dados_conta['id']))
 
                     conn.commit()
                     conn.close()
