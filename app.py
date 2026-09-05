@@ -1,36 +1,82 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
+import hashlib
+from fpdf import FPDF
+import io
 
 # ==========================================
-# 1. AUTENTICAÇÃO E LOGIN
+# FUNÇÃO PARA GERAR PDF EM MEMÓRIA
 # ==========================================
-USUARIO_CORRETO = "admin"
-SENHA_CORRETA = "conslin123"  # Altere para a senha desejada
+class PDFRelatorio(FPDF):
+    def header(self):
+        self.set_font('Arial', 'B', 14)
+        self.cell(0, 10, 'Conslin - Gestão Operacional & Financeira', border=False, ln=True, align='C')
+        self.set_font('Arial', 'I', 9)
+        self.cell(0, 5, 'Relatório Gerencial Emitido via Sistema', border=False, ln=True, align='C')
+        self.ln(5)
 
-def verificar_login():
-    if "autenticado" not in st.session_state:
-        st.session_state["autenticado"] = False
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Arial', 'I', 8)
+        self.cell(0, 10, f'Página {self.page_no()}', align='C')
 
-    if not st.session_state["autenticado"]:
-        st.title("🔒 Acesso Restrito - Conslin")
-        with st.form("form_login"):
-            usuario = st.text_input("Usuário")
-            senha = st.text_input("Senha", type="password")
-            btn_login = st.form_submit_button("Entrar")
-            
-            if btn_login:
-                if usuario == USUARIO_CORRETO and senha == SENHA_CORRETA:
-                    st.session_state["autenticado"] = True
-                    st.success("Acesso liberado!")
-                    st.rerun()
-                else:
-                    st.error("Usuário ou senha incorretos.")
-        return False
-    return True
+def gerar_pdf_atendimento(cliente_nome, categoria, status, orcamento, fechado, descricao):
+    pdf = PDFRelatorio()
+    pdf.add_page()
+    
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, f"Detalhamento do Atendimento / Orçamento", ln=True)
+    pdf.ln(3)
+
+    pdf.set_font("Arial", "", 10)
+    pdf.cell(0, 6, f"Cliente: {cliente_nome}", ln=True)
+    pdf.cell(0, 6, f"Categoria: {categoria}", ln=True)
+    pdf.cell(0, 6, f"Status: {status}", ln=True)
+    pdf.cell(0, 6, f"Valor Orçado: R$ {orcamento:,.2f}", ln=True)
+    pdf.cell(0, 6, f"Valor Fechado: R$ {fechado:,.2f}", ln=True)
+    pdf.ln(4)
+
+    pdf.set_font("Arial", "B", 10)
+    pdf.cell(0, 6, "Descrição do Serviço:", ln=True)
+    pdf.set_font("Arial", "", 10)
+    pdf.multi_cell(0, 6, descricao if descricao else "Sem descrição informada.")
+
+    # Retorna o PDF em formato de bytes para download no Streamlit
+    return pdf.output(dest='S').encode('latin-1', errors='replace')
+
+def gerar_pdf_tabela(titulo, df):
+    pdf = PDFRelatorio()
+    pdf.add_page()
+    
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, titulo, ln=True)
+    pdf.ln(3)
+
+    pdf.set_font("Arial", "", 9)
+    for col in df.columns:
+        pdf.cell(38, 7, str(col)[:18], border=1)
+    pdf.ln()
+
+    for _, row in df.iterrows():
+        for col in df.columns:
+            val = str(row[col])
+            pdf.cell(38, 6, val[:18], border=1)
+        pdf.ln()
+
+    return pdf.output(dest='S').encode('latin-1', errors='replace')
 
 # ==========================================
-# 2. BANCO DE DADOS
+# FUNÇÕES DE CRIPTOGRAFIA DE SENHA
+# ==========================================
+def gerar_hash_senha(senha):
+    return hashlib.sha256(senha.encode('utf-8')).hexdigest()
+
+def verificar_senha_hash(senha_digitada, hash_guardado):
+    return gerar_hash_senha(senha_digitada) == hash_guardado
+
+# ==========================================
+# BANCO DE DADOS
 # ==========================================
 def conectar():
     return sqlite3.connect("gestao_escritorio.db")
@@ -39,7 +85,24 @@ def criar_tabelas():
     conn = conectar()
     cursor = conn.cursor()
     
-    # Clientes
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS usuarios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        usuario TEXT UNIQUE NOT NULL,
+        senha_hash TEXT NOT NULL,
+        perfil TEXT DEFAULT 'Atendente'
+    )
+    """)
+    
+    cursor.execute("SELECT COUNT(*) FROM usuarios")
+    if cursor.fetchone()[0] == 0:
+        senha_hash_padrao = gerar_hash_senha("conslin123")
+        cursor.execute("""
+        INSERT INTO usuarios (nome, usuario, senha_hash, perfil)
+        VALUES (?, ?, ?, ?)
+        """, ("Administrador Conslin", "admin", senha_hash_padrao, "Admin"))
+    
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS clientes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,7 +114,6 @@ def criar_tabelas():
     )
     """)
     
-    # Atendimentos / Orçamentos
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS atendimentos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,7 +129,6 @@ def criar_tabelas():
     )
     """)
     
-    # Metas
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS metas (
         categoria TEXT PRIMARY KEY,
@@ -75,12 +136,11 @@ def criar_tabelas():
     )
     """)
     
-    # Prestadores e Fornecedores
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS parceiros (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nome TEXT NOT NULL,
-        tipo TEXT NOT NULL, -- 'Prestador de Serviço', 'Equipe do Escritório', 'Fornecedor'
+        tipo TEXT NOT NULL,
         telefone TEXT,
         cpf_cnpj TEXT,
         chave_pix TEXT,
@@ -88,21 +148,19 @@ def criar_tabelas():
     )
     """)
     
-    # Contas a Pagar / Dívidas / Acordos
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS contas_pagar (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         parceiro_id INTEGER,
         descricao TEXT NOT NULL,
-        tipo_conta TEXT NOT NULL, -- 'Dívida', 'Acordo', 'Prestação de Serviço', 'Fornecedor', 'Equipe'
+        tipo_conta TEXT NOT NULL,
         valor REAL NOT NULL,
         data_vencimento DATE NOT NULL,
-        status TEXT NOT NULL, -- 'Pendente', 'Pago', 'Acordado / Parcelado'
+        status TEXT NOT NULL,
         FOREIGN KEY (parceiro_id) REFERENCES parceiros (id)
     )
     """)
     
-    # Histórico de Pagamentos Efetuados
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS pagamentos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,17 +183,56 @@ def criar_tabelas():
     conn.close()
 
 # ==========================================
-# 3. INTERFACE PRINCIPAL
+# AUTENTICAÇÃO E LOGIN
+# ==========================================
+def autenticar_usuario(usuario_input, senha_input):
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, nome, usuario, senha_hash, perfil FROM usuarios WHERE usuario = ?", (usuario_input.strip().lower(),))
+    res = cursor.fetchone()
+    conn.close()
+    
+    if res:
+        user_id, nome, user_login, hash_guardado, perfil = res
+        if verificar_senha_hash(senha_input, hash_guardado):
+            return {"id": user_id, "nome": nome, "usuario": user_login, "perfil": perfil}
+    return None
+
+def tela_login():
+    if "usuario_logado" not in st.session_state:
+        st.session_state["usuario_logado"] = None
+
+    if st.session_state["usuario_logado"] is None:
+        st.title("🔒 Acesso Restrito - Conslin")
+        with st.form("form_login"):
+            usuario = st.text_input("Usuário").strip().lower()
+            senha = st.text_input("Senha", type="password")
+            btn_login = st.form_submit_button("Entrar")
+            
+            if btn_login:
+                dados_user = autenticar_usuario(usuario, senha)
+                if dados_user:
+                    st.session_state["usuario_logado"] = dados_user
+                    st.success(f"Bem-vindo(a), {dados_user['nome']}!")
+                    st.rerun()
+                else:
+                    st.error("Usuário ou senha incorretos.")
+        return False
+    return True
+
+# ==========================================
+# INTERFACE PRINCIPAL
 # ==========================================
 criar_tabelas()
 
 st.set_page_config(page_title="Sistema de Gestão Conslin", layout="wide")
 
-if verificar_login():
-    # Botão de Logout na barra lateral
-    st.sidebar.write(f"👤 Usuário: **{USUARIO_CORRETO}**")
-    if st.sidebar.button("Sair / Logout"):
-        st.session_state["autenticado"] = False
+if tela_login():
+    user = st.session_state["usuario_logado"]
+    
+    st.sidebar.markdown(f"👤 **{user['nome']}**  \n*(Perfil: {user['perfil']})*")
+    if st.sidebar.button("🚪 Sair / Logout"):
+        st.session_state["usuario_logado"] = None
         st.rerun()
 
     CATEGORIAS = ["Documentação", "Pequenos Serviços", "Reforma", "Manutenção", "Venda de Materiais"]
@@ -145,7 +242,7 @@ if verificar_login():
 
     st.title("🏗️ Conslin - Gestão Operacional & Financeira")
 
-    menu = st.sidebar.radio("Navegação", [
+    opcoes_menu = [
         "Dashboard & Metas",
         "Cadastro de Clientes",
         "Novo Atendimento / Orçamento",
@@ -153,8 +250,11 @@ if verificar_login():
         "Prestadores & Fornecedores",
         "Contas a Pagar, Dívidas & Acordos",
         "Registrar Pagamentos",
-        "Fluxo de Caixa & DRE"
-    ])
+        "Fluxo de Caixa & DRE",
+        "⚙️ Gerenciar Usuários"
+    ]
+
+    menu = st.sidebar.radio("Navegação", opcoes_menu)
 
     # ----------------------------------------------------
     # DASHBOARD & METAS
@@ -262,7 +362,7 @@ if verificar_login():
                     st.success("Atendimento registrado no banco de dados!")
 
     # ----------------------------------------------------
-    # GESTÃO DE ATENDIMENTOS
+    # GESTÃO DE ATENDIMENTOS (COM EXPORTAÇÃO PDF)
     # ----------------------------------------------------
     elif menu == "Gestão de Atendimentos":
         st.header("📋 Gestão e Atualização do Funil de Atendimentos")
@@ -281,16 +381,29 @@ if verificar_login():
             st.info("Nenhum atendimento registrado até o momento.")
         else:
             st.dataframe(df_atendimentos, use_container_width=True)
-            st.subheader("✏️ Atualizar Status ou Valores")
+
+            # Botão para exportar relatório geral em PDF
+            pdf_bytes = gerar_pdf_tabela("Relatorio de Atendimentos - Conslin", df_atendimentos[['id', 'Cliente', 'Categoria', 'Status', 'Fechado (R$)']])
+            st.download_button("📄 Gerar PDF de Todos os Atendimentos", data=pdf_bytes, file_name="atendimentos_conslin.pdf", mime="application/pdf")
+
+            st.divider()
+            st.subheader("✏️ Edição & Exportação de PDF Individual")
             atendimento_id = st.number_input("Informe o ID do Atendimento", min_value=1, step=1)
             registro = df_atendimentos[df_atendimentos['id'] == atendimento_id]
+            
             if not registro.empty:
-                st.write(f"Editando atendimento do cliente: **{registro.iloc[0]['Cliente']}**")
+                reg = registro.iloc[0]
+                st.write(f"Editando atendimento do cliente: **{reg['Cliente']}**")
+                
+                # Gerar PDF do Atendimento Específico
+                pdf_ind = gerar_pdf_atendimento(reg['Cliente'], reg['Categoria'], reg['Status'], float(reg['Orçado (R$)']), float(reg['Fechado (R$)']), reg['Descrição'])
+                st.download_button(f"📥 Baixar Orçamento/PDF (ID #{reg['id']})", data=pdf_ind, file_name=f"orcamento_atendimento_{reg['id']}.pdf", mime="application/pdf")
+
                 with st.form("form_edicao"):
-                    novo_status = st.selectbox("Novo Status", STATUS_OPCOES, index=STATUS_OPCOES.index(registro.iloc[0]['Status']))
-                    novo_orcamento = st.number_input("Novo Valor Orçado (R$)", value=float(registro.iloc[0]['Orçado (R$)']))
-                    novo_fechado = st.number_input("Novo Valor Fechado (R$)", value=float(registro.iloc[0]['Fechado (R$)']))
-                    novas_despesas = st.number_input("Novas Despesas (R$)", value=float(registro.iloc[0]['Despesas (R$)']))
+                    novo_status = st.selectbox("Novo Status", STATUS_OPCOES, index=STATUS_OPCOES.index(reg['Status']))
+                    novo_orcamento = st.number_input("Novo Valor Orçado (R$)", value=float(reg['Orçado (R$)']))
+                    novo_fechado = st.number_input("Novo Valor Fechado (R$)", value=float(reg['Fechado (R$)']))
+                    novas_despesas = st.number_input("Novas Despesas (R$)", value=float(reg['Despesas (R$)']))
                     if st.form_submit_button("Atualizar Atendimento"):
                         conn = conectar()
                         cursor = conn.cursor()
@@ -316,7 +429,7 @@ if verificar_login():
             cpf_cnpj = st.text_input("CPF ou CNPJ")
             chave_pix = st.text_input("Chave PIX / Dados Bancários")
             observacao = st.text_area("Observações (Especialidade, Condições, etc.)")
-            if st.form_submit_button("Cadastrar Cadastrado"):
+            if st.form_submit_button("Cadastrar"):
                 if nome:
                     conn = conectar()
                     cursor = conn.cursor()
@@ -337,7 +450,7 @@ if verificar_login():
         st.dataframe(df_parceiros, use_container_width=True)
 
     # ----------------------------------------------------
-    # CONTAS A PAGAR, DÍVIDAS & ACORDOS
+    # CONTAS A PAGAR (COM EXPORTAÇÃO PDF)
     # ----------------------------------------------------
     elif menu == "Contas a Pagar, Dívidas & Acordos":
         st.header("💸 Contas a Pagar, Dívidas e Acordos")
@@ -384,7 +497,11 @@ if verificar_login():
         if not df_contas.empty:
             st.dataframe(df_contas, use_container_width=True)
             pendentes = df_contas[df_contas['Status'] != 'Pago']['Valor (R$)'].sum()
-            st.warning(f" Total Pendente / Em Aberto em Dívidas e Contas: **R$ {pendentes:,.2f}**")
+            st.warning(f"⚠️ Total Pendente / Em Aberto em Dívidas e Contas: **R$ {pendentes:,.2f}**")
+            
+            # Download de PDF das Contas
+            pdf_contas = gerar_pdf_tabela("Relatorio de Contas a Pagar - Conslin", df_contas[['Credor', 'Tipo', 'Valor (R$)', 'Vencimento', 'Status']])
+            st.download_button("📄 Baixar Relatório de Contas (PDF)", data=pdf_contas, file_name="contas_a_pagar.pdf", mime="application/pdf")
 
     # ----------------------------------------------------
     # REGISTRAR PAGAMENTOS
@@ -420,19 +537,16 @@ if verificar_login():
                 if st.form_submit_button("Confirmar Pagamento"):
                     conn = conectar()
                     cursor = conn.cursor()
-                    # Registrar histórico
                     cursor.execute("""
                     INSERT INTO pagamentos (conta_id, parceiro_id, valor_pago, data_pagamento, forma_pagamento, comprovante_ref)
                     VALUES (?, ?, ?, ?, ?, ?)
                     """, (dados_conta['id'], dados_conta['parceiro_id'], valor_pago, str(data_pagamento), forma_pagamento, comprovante))
                     
-                    # Atualizar conta como Pago se o valor for integral
                     if valor_pago >= dados_conta['valor']:
                         cursor.execute("UPDATE contas_pagar SET status = 'Pago' WHERE id = ?", (dados_conta['id'],))
                     else:
-                        # Se pagou parcial, atualiza valor restante
                         novo_valor = dados_conta['valor'] - valor_pago
-                        cursor.execute("UPDATE contas_pagar SET valor = ? WHERE id = ?", (novo_valor, dados_conta['id']))
+                        cursor.execute("UPDATE contas_pagar SET valor = ? WHERE id = ?", (dados_conta['id'],))
 
                     conn.commit()
                     conn.close()
@@ -471,4 +585,72 @@ if verificar_login():
         col2.metric("Total Saídas (Pagas)", f"R$ {total_pagos:,.2f}")
         col3.metric("Contas a Pagar (Aberto)", f"R$ {total_pendencias:,.2f}")
         col4.metric("Saldo do Exercício", f"R$ {(total_entradas - total_pagos):,.2f}")
-       
+
+    # ----------------------------------------------------
+    # GERENCIAR USUÁRIOS E SENHAS
+    # ----------------------------------------------------
+    elif menu == "⚙️ Gerenciar Usuários":
+        st.header("⚙️ Gestão de Usuários e Permissões")
+        
+        tab_cadastrar, tab_listar, tab_minha_senha = st.tabs(["➕ Novo Usuário", "👥 Usuários Cadastrados", "🔑 Alterar Minha Senha"])
+
+        with tab_cadastrar:
+            with st.form("form_novo_usuario"):
+                st.subheader("Cadastrar Novo Acesso")
+                nome_novo = st.text_input("Nome Completo / Pessoa")
+                login_novo = st.text_input("Nome de Usuário (login)").strip().lower()
+                senha_nova = st.text_input("Senha", type="password")
+                perfil_novo = st.selectbox("Perfil de Acesso", ["Admin", "Atendente"])
+                
+                if st.form_submit_button("Cadastrar Usuário"):
+                    if nome_novo and login_novo and senha_nova:
+                        conn = conectar()
+                        cursor = conn.cursor()
+                        try:
+                            cursor.execute("""
+                            INSERT INTO usuarios (nome, usuario, senha_hash, perfil)
+                            VALUES (?, ?, ?, ?)
+                            """, (nome_novo, login_novo, gerar_hash_senha(senha_nova), perfil_novo))
+                            conn.commit()
+                            st.success(f"Usuário **{login_novo}** cadastrado com sucesso!")
+                        except sqlite3.IntegrityError:
+                            st.error("Este nome de usuário já existe. Escolha outro.")
+                        finally:
+                            conn.close()
+                    else:
+                        st.error("Preencha todos os campos obrigatórios.")
+
+        with tab_listar:
+            st.subheader("Lista de Acessos ao Sistema")
+            conn = conectar()
+            df_users = pd.read_sql_query("SELECT id, nome, usuario, perfil FROM usuarios", conn)
+            conn.close()
+            st.dataframe(df_users, use_container_width=True)
+
+        with tab_minha_senha:
+            st.subheader("Alterar Minha Senha de Acesso")
+            with st.form("form_alterar_senha"):
+                senha_atual = st.text_input("Senha Atual", type="password")
+                nova_senha = st.text_input("Nova Senha", type="password")
+                confirma_senha = st.text_input("Confirmar Nova Senha", type="password")
+                
+                if st.form_submit_button("Atualizar Senha"):
+                    if nova_senha != confirma_senha:
+                        st.error("A nova senha e a confirmação não coincidem.")
+                    elif len(nova_senha) < 4:
+                        st.error("A nova senha deve ter pelo menos 4 caracteres.")
+                    else:
+                        conn = conectar()
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT senha_hash FROM usuarios WHERE id = ?", (user['id'],))
+                        hash_atual = cursor.fetchone()[0]
+                        
+                        if verificar_senha_hash(senha_atual, hash_atual):
+                            nova_hash = gerar_hash_senha(nova_senha)
+                            cursor.execute("UPDATE usuarios SET senha_hash = ? WHERE id = ?", (nova_hash, user['id']))
+                            conn.commit()
+                            conn.close()
+                            st.success("Sua senha foi alterada com sucesso!")
+                        else:
+                            conn.close()
+                            st.error("Sua senha atual está incorreta.")
