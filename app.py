@@ -131,10 +131,20 @@ def criar_tabelas():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS metas (
         categoria TEXT PRIMARY KEY,
+        meta_diaria REAL DEFAULT 0.0,
+        meta_semanal REAL DEFAULT 0.0,
         meta_valor REAL DEFAULT 0.0
     )
     """)
     
+    # Migração de colunas
+    cursor.execute("PRAGMA table_info(metas)")
+    colunas = [col[1] for col in cursor.fetchall()]
+    if "meta_diaria" not in colunas:
+        cursor.execute("ALTER TABLE metas ADD COLUMN meta_diaria REAL DEFAULT 0.0")
+    if "meta_semanal" not in colunas:
+        cursor.execute("ALTER TABLE metas ADD COLUMN meta_semanal REAL DEFAULT 0.0")
+
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS parceiros (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,7 +186,7 @@ def criar_tabelas():
     
     categorias = ["Documentação", "Pequenos Serviços", "Reforma", "Manutenção", "Venda de Materiais"]
     for cat in categorias:
-        cursor.execute("INSERT OR IGNORE INTO metas (categoria, meta_valor) VALUES (?, 0.0)", (cat,))
+        cursor.execute("INSERT OR IGNORE INTO metas (categoria, meta_diaria, meta_semanal, meta_valor) VALUES (?, 0.0, 0.0, 0.0)", (cat,))
         
     conn.commit()
     conn.close()
@@ -266,7 +276,7 @@ if tela_login():
     menu = st.sidebar.radio("Navegação", opcoes_menu)
 
     # ----------------------------------------------------
-    # DASHBOARD & METAS (DIÁRIA, SEMANAL, MÊS ATUAL E ACUMULADO 12 MESES)
+    # DASHBOARD & METAS
     # ----------------------------------------------------
     if menu == "Dashboard & Metas":
         st.header("🎯 Painel de Metas e Desempenho Temporal")
@@ -276,7 +286,6 @@ if tela_login():
         df_metas = pd.read_sql_query("SELECT * FROM metas", conn)
         conn.close()
 
-        # Tratamento de datas
         if not df_atendimentos.empty:
             df_atendimentos['data_dt'] = pd.to_datetime(df_atendimentos['data_contato'], errors='coerce').dt.date
             df_aprovados = df_atendimentos[df_atendimentos['status'].isin(["Aprovado / Execução", "Concluído"])].copy()
@@ -284,59 +293,100 @@ if tela_login():
             df_aprovados = pd.DataFrame(columns=['categoria', 'valor_fechado', 'data_dt'])
 
         hoje = date.today()
-        inicio_semana = hoje - timedelta(days=hoje.weekday()) # Segunda-feira da semana atual
+        inicio_semana = hoje - timedelta(days=hoje.weekday())
         inicio_mes = hoje.replace(day=1)
         inicio_ano = hoje.replace(month=1, day=1)
 
         if perfil_usuario == "Admin":
-            with st.expander("⚙️ Ajustar Meta Mensal por Categoria"):
-                with st.form("form_metas"):
-                    novas_metas = {}
+            with st.expander("⚙️ Configurar e Editar Metas (Diária, Semanal e Mensal) por Categoria"):
+                st.write("Digite manualmente os valores de meta para cada subcategoria. Se os valores diários/semanais estiverem zerados, o sistema exibirá uma sugestão proporcional aos 7 dias da semana.")
+                
+                with st.form("form_metas_completas"):
+                    novas_metas_diarias = {}
+                    novas_metas_semanais = {}
+                    novas_metas_mensais = {}
+                    
                     for cat in CATEGORIAS:
-                        meta_atual = float(df_metas[df_metas['categoria'] == cat]['meta_valor'].values[0]) if not df_metas.empty and cat in df_metas['categoria'].values else 0.0
-                        novas_metas[cat] = st.number_input(f"Meta Mensal para {cat} (R$)", value=meta_atual, step=500.0)
-                    if st.form_submit_button("Salvar Metas"):
+                        st.markdown(f"**📍 Subcategoria: {cat}**")
+                        row_cat = df_metas[df_metas['categoria'] == cat] if not df_metas.empty and cat in df_metas['categoria'].values else pd.DataFrame()
+                        
+                        m_mensal_cad = float(row_cat['meta_valor'].values[0]) if not row_cat.empty and 'meta_valor' in row_cat.columns else 0.0
+                        m_semanal_cad = float(row_cat['meta_semanal'].values[0]) if not row_cat.empty and 'meta_semanal' in row_cat.columns else 0.0
+                        m_diaria_cad = float(row_cat['meta_diaria'].values[0]) if not row_cat.empty and 'meta_diaria' in row_cat.columns else 0.0
+                        
+                        # Cálculo da Sugestão Inicial (baseado em 30 dias corridos / 4.33 semanas)
+                        sugestao_semanal = round(m_mensal_cad / 4.33, 2) if m_mensal_cad > 0 else 0.0
+                        sugestao_diaria = round(m_mensal_cad / 30.0, 2) if m_mensal_cad > 0 else 0.0
+
+                        c1, c2, c3 = st.columns(3)
+                        val_m = c1.number_input(f"Meta Mensal ({cat})", value=m_mensal_cad, step=500.0, key=f"m_{cat}")
+                        
+                        # Preenche com o valor salvo ou com a sugestão calculada
+                        val_s_default = m_semanal_cad if m_semanal_cad > 0 else sugestao_semanal
+                        val_d_default = m_diaria_cad if m_diaria_cad > 0 else sugestao_diaria
+                        
+                        val_s = c2.number_input(f"Meta Semanal ({cat})", value=val_s_default, step=100.0, key=f"s_{cat}", help="Livre para edição manual")
+                        val_d = c3.number_input(f"Meta Diária ({cat})", value=val_d_default, step=50.0, key=f"d_{cat}", help="Livre para edição manual (segunda a domingo)")
+                        
+                        novas_metas_mensais[cat] = val_m
+                        novas_metas_semanais[cat] = val_s
+                        novas_metas_diarias[cat] = val_d
+                        st.divider()
+
+                    if st.form_submit_button("💾 Salvar Todas as Metas"):
                         conn = conectar()
                         cursor = conn.cursor()
-                        for cat, valor in novas_metas.items():
-                            cursor.execute("UPDATE metas SET meta_valor = ? WHERE categoria = ?", (valor, cat))
+                        for cat in CATEGORIAS:
+                            cursor.execute("""
+                            UPDATE metas 
+                            SET meta_diaria = ?, meta_semanal = ?, meta_valor = ? 
+                            WHERE categoria = ?
+                            """, (novas_metas_diarias[cat], novas_metas_semanais[cat], novas_metas_mensais[cat], cat))
                         conn.commit()
                         conn.close()
-                        st.success("Metas atualizadas com sucesso!")
+                        st.success("Metas salvas e atualizadas com sucesso!")
                         st.rerun()
 
-        st.subheader("📊 Resumo Geral de Fechamentos")
+        st.subheader("📊 Resumo Geral de Fechamentos x Metas Totais")
         
-        # Filtragem por Períodos de Tempo
         val_hoje = df_aprovados[df_aprovados['data_dt'] == hoje]['valor_fechado'].sum() if not df_aprovados.empty else 0.0
         val_semana = df_aprovados[df_aprovados['data_dt'] >= inicio_semana]['valor_fechado'].sum() if not df_aprovados.empty else 0.0
         val_mes = df_aprovados[df_aprovados['data_dt'] >= inicio_mes]['valor_fechado'].sum() if not df_aprovados.empty else 0.0
         val_ano = df_aprovados[df_aprovados['data_dt'] >= inicio_ano]['valor_fechado'].sum() if not df_aprovados.empty else 0.0
 
+        meta_total_diaria = df_metas['meta_diaria'].sum() if not df_metas.empty and 'meta_diaria' in df_metas.columns else 0.0
+        meta_total_semanal = df_metas['meta_semanal'].sum() if not df_metas.empty and 'meta_semanal' in df_metas.columns else 0.0
+        meta_total_mensal = df_metas['meta_valor'].sum() if not df_metas.empty else 0.0
+
         col_d, col_s, col_m, col_a = st.columns(4)
-        col_d.metric("Vendas Hoje", f"R$ {val_hoje:,.2f}")
-        col_s.metric("Vendas na Semana", f"R$ {val_semana:,.2f}")
-        col_m.metric("Vendas no Mês Atual", f"R$ {val_mes:,.2f}")
-        col_a.metric("Acumulado do Ano / Periodo", f"R$ {val_ano:,.2f}")
+        col_d.metric("Vendas Hoje", f"R$ {val_hoje:,.2f}", delta=f"{((val_hoje/meta_total_diaria)*100 if meta_total_diaria > 0 else 0):.1f}% da meta" if meta_total_diaria > 0 else "Sem meta definida")
+        col_s.metric("Vendas na Semana", f"R$ {val_semana:,.2f}", delta=f"{((val_semana/meta_total_semanal)*100 if meta_total_semanal > 0 else 0):.1f}% da meta" if meta_total_semanal > 0 else "Sem meta definida")
+        col_m.metric("Vendas no Mês Atual", f"R$ {val_mes:,.2f}", delta=f"{((val_mes/meta_total_mensal)*100 if meta_total_mensal > 0 else 0):.1f}% da meta" if meta_total_mensal > 0 else "Sem meta definida")
+        col_a.metric("Acumulado do Ano", f"R$ {val_ano:,.2f}")
 
         st.divider()
-        st.subheader("🎯 Atingimento da Meta Mensal por Categoria")
+        st.subheader("🎯 Atingimento de Metas por Subcategoria")
         
+        visao_periodo = st.radio("Selecione a meta que deseja comparar:", ["Meta Diária (Hoje)", "Meta Semanal (Semana Atual)", "Meta Mensal (Mês Vigente)"], horizontal=True)
+
         cols = st.columns(len(CATEGORIAS))
         for i, cat in enumerate(CATEGORIAS):
-            meta_val = float(df_metas[df_metas['categoria'] == cat]['meta_valor'].values[0]) if not df_metas.empty and cat in df_metas['categoria'].values else 0.0
+            row_cat = df_metas[df_metas['categoria'] == cat] if not df_metas.empty and cat in df_metas['categoria'].values else pd.DataFrame()
             
-            if not df_aprovados.empty:
-                realizado_cat = df_aprovados[
-                    (df_aprovados['categoria'] == cat) & 
-                    (df_aprovados['data_dt'] >= inicio_mes)
-                ]['valor_fechado'].sum()
+            if visao_periodo == "Meta Diária (Hoje)":
+                meta_val = float(row_cat['meta_diaria'].values[0]) if not row_cat.empty and 'meta_diaria' in row_cat.columns else 0.0
+                realizado_cat = df_aprovados[(df_aprovados['categoria'] == cat) & (df_aprovados['data_dt'] == hoje)]['valor_fechado'].sum() if not df_aprovados.empty else 0.0
+            elif visao_periodo == "Meta Semanal (Semana Atual)":
+                meta_val = float(row_cat['meta_semanal'].values[0]) if not row_cat.empty and 'meta_semanal' in row_cat.columns else 0.0
+                realizado_cat = df_aprovados[(df_aprovados['categoria'] == cat) & (df_aprovados['data_dt'] >= inicio_semana)]['valor_fechado'].sum() if not df_aprovados.empty else 0.0
             else:
-                realizado_cat = 0.0
+                meta_val = float(row_cat['meta_valor'].values[0]) if not row_cat.empty else 0.0
+                realizado_cat = df_aprovados[(df_aprovados['categoria'] == cat) & (df_aprovados['data_dt'] >= inicio_mes)]['valor_fechado'].sum() if not df_aprovados.empty else 0.0
 
             percentual = (realizado_cat / meta_val * 100) if meta_val > 0 else 0.0
             with cols[i]:
-                st.metric(label=cat, value=f"R$ {realizado_cat:,.2f}", delta=f"{percentual:.1f}% da meta")
+                st.markdown(f"**{cat}**")
+                st.metric(label="Realizado", value=f"R$ {realizado_cat:,.2f}", delta=f"{percentual:.1f}% de R$ {meta_val:,.2f}")
                 st.progress(min(percentual / 100, 1.0))
 
     # ----------------------------------------------------
