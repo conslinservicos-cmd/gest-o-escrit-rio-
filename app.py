@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import hashlib
+from datetime import datetime, date, timedelta
 from fpdf import FPDF
 
 # ==========================================
@@ -241,9 +242,6 @@ if tela_login():
 
     st.title("🏗️ Conslin - Gestão Operacional & Financeira")
 
-    # ----------------------------------------------------
-    # DEFINIÇÃO DE PERMISSÕES DE MENUS POR PERFIL
-    # ----------------------------------------------------
     menus_por_perfil = {
         "Atendente": [
             "Dashboard & Metas",
@@ -264,28 +262,39 @@ if tela_login():
         ]
     }
 
-    # Carrega opções disponíveis para o perfil logado
     opcoes_menu = menus_por_perfil.get(perfil_usuario, menus_por_perfil["Atendente"])
     menu = st.sidebar.radio("Navegação", opcoes_menu)
 
     # ----------------------------------------------------
-    # DASHBOARD & METAS (Disponível para todos)
+    # DASHBOARD & METAS (DIÁRIA, SEMANAL, MÊS ATUAL E ACUMULADO 12 MESES)
     # ----------------------------------------------------
     if menu == "Dashboard & Metas":
-        st.header("🎯 Painel de Metas e Desempenho por Categoria")
+        st.header("🎯 Painel de Metas e Desempenho Temporal")
+        
         conn = conectar()
         df_atendimentos = pd.read_sql_query("SELECT * FROM atendimentos", conn)
         df_metas = pd.read_sql_query("SELECT * FROM metas", conn)
         conn.close()
 
-        # Apenas Admin pode alterar metas
+        # Tratamento de datas
+        if not df_atendimentos.empty:
+            df_atendimentos['data_dt'] = pd.to_datetime(df_atendimentos['data_contato'], errors='coerce').dt.date
+            df_aprovados = df_atendimentos[df_atendimentos['status'].isin(["Aprovado / Execução", "Concluído"])].copy()
+        else:
+            df_aprovados = pd.DataFrame(columns=['categoria', 'valor_fechado', 'data_dt'])
+
+        hoje = date.today()
+        inicio_semana = hoje - timedelta(days=hoje.weekday()) # Segunda-feira da semana atual
+        inicio_mes = hoje.replace(day=1)
+        inicio_ano = hoje.replace(month=1, day=1)
+
         if perfil_usuario == "Admin":
-            with st.expander("⚙️ Ajustar Metas de Venda por Categoria"):
+            with st.expander("⚙️ Ajustar Meta Mensal por Categoria"):
                 with st.form("form_metas"):
                     novas_metas = {}
                     for cat in CATEGORIAS:
                         meta_atual = float(df_metas[df_metas['categoria'] == cat]['meta_valor'].values[0]) if not df_metas.empty and cat in df_metas['categoria'].values else 0.0
-                        novas_metas[cat] = st.number_input(f"Meta para {cat} (R$)", value=meta_atual, step=500.0)
+                        novas_metas[cat] = st.number_input(f"Meta Mensal para {cat} (R$)", value=meta_atual, step=500.0)
                     if st.form_submit_button("Salvar Metas"):
                         conn = conectar()
                         cursor = conn.cursor()
@@ -296,21 +305,38 @@ if tela_login():
                         st.success("Metas atualizadas com sucesso!")
                         st.rerun()
 
-        st.subheader("Atingimento de Metas (Serviços Aprovados / Concluídos)")
+        st.subheader("📊 Resumo Geral de Fechamentos")
+        
+        # Filtragem por Períodos de Tempo
+        val_hoje = df_aprovados[df_aprovados['data_dt'] == hoje]['valor_fechado'].sum() if not df_aprovados.empty else 0.0
+        val_semana = df_aprovados[df_aprovados['data_dt'] >= inicio_semana]['valor_fechado'].sum() if not df_aprovados.empty else 0.0
+        val_mes = df_aprovados[df_aprovados['data_dt'] >= inicio_mes]['valor_fechado'].sum() if not df_aprovados.empty else 0.0
+        val_ano = df_aprovados[df_aprovados['data_dt'] >= inicio_ano]['valor_fechado'].sum() if not df_aprovados.empty else 0.0
+
+        col_d, col_s, col_m, col_a = st.columns(4)
+        col_d.metric("Vendas Hoje", f"R$ {val_hoje:,.2f}")
+        col_s.metric("Vendas na Semana", f"R$ {val_semana:,.2f}")
+        col_m.metric("Vendas no Mês Atual", f"R$ {val_mes:,.2f}")
+        col_a.metric("Acumulado do Ano / Periodo", f"R$ {val_ano:,.2f}")
+
+        st.divider()
+        st.subheader("🎯 Atingimento da Meta Mensal por Categoria")
+        
         cols = st.columns(len(CATEGORIAS))
         for i, cat in enumerate(CATEGORIAS):
             meta_val = float(df_metas[df_metas['categoria'] == cat]['meta_valor'].values[0]) if not df_metas.empty and cat in df_metas['categoria'].values else 0.0
-            if not df_atendimentos.empty:
-                realizado = df_atendimentos[
-                    (df_atendimentos['categoria'] == cat) & 
-                    (df_atendimentos['status'].isin(["Aprovado / Execução", "Concluído"]))
+            
+            if not df_aprovados.empty:
+                realizado_cat = df_aprovados[
+                    (df_aprovados['categoria'] == cat) & 
+                    (df_aprovados['data_dt'] >= inicio_mes)
                 ]['valor_fechado'].sum()
             else:
-                realizado = 0.0
+                realizado_cat = 0.0
 
-            percentual = (realizado / meta_val * 100) if meta_val > 0 else 0.0
+            percentual = (realizado_cat / meta_val * 100) if meta_val > 0 else 0.0
             with cols[i]:
-                st.metric(label=cat, value=f"R$ {realizado:,.2f}", delta=f"{percentual:.1f}% da meta")
+                st.metric(label=cat, value=f"R$ {realizado_cat:,.2f}", delta=f"{percentual:.1f}% da meta")
                 st.progress(min(percentual / 100, 1.0))
 
     # ----------------------------------------------------
@@ -363,14 +389,15 @@ if tela_login():
                 valor_orcamento = st.number_input("Valor Estimado / Orçamento (R$)", value=0.0, step=100.0)
                 valor_fechado = st.number_input("Valor Fechado / Venda (R$)", value=0.0, step=100.0)
                 despesas = st.number_input("Despesas Previstas (R$)", value=0.0, step=50.0)
+                data_contato = st.date_input("Data do Fechamento / Contato", value=date.today())
                 if st.form_submit_button("Salvar Atendimento"):
                     cliente_id = opcoes_clientes[cliente_sel]
                     conn = conectar()
                     cursor = conn.cursor()
                     cursor.execute("""
-                    INSERT INTO atendimentos (cliente_id, categoria, descricao, status, valor_orcamento, valor_fechado, despesas)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (cliente_id, categoria, descricao, status, valor_orcamento, valor_fechado, despesas))
+                    INSERT INTO atendimentos (cliente_id, categoria, descricao, status, valor_orcamento, valor_fechado, despesas, data_contato)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (cliente_id, categoria, descricao, status, valor_orcamento, valor_fechado, despesas, str(data_contato)))
                     conn.commit()
                     conn.close()
                     st.success("Atendimento registrado no banco de dados!")
@@ -677,7 +704,7 @@ if tela_login():
                             cursor.execute("UPDATE usuarios SET perfil = ? WHERE id = ?", (novo_perfil, user_id))
                             conn.commit()
                             conn.close()
-                            st.success("Perfil atualizado com sucesso! As alterações entram em vigor no próximo login do usuário.")
+                            st.success("Perfil atualizado com sucesso!")
                             st.rerun()
 
             with tab_minha_senha:
