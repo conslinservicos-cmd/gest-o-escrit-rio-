@@ -137,7 +137,6 @@ def criar_tabelas():
     )
     """)
     
-    # Migração de colunas de metas
     cursor.execute("PRAGMA table_info(metas)")
     colunas_metas = [col[1] for col in cursor.fetchall()]
     if "meta_diaria" not in colunas_metas:
@@ -184,7 +183,6 @@ def criar_tabelas():
     )
     """)
 
-    # Nova Tabela: Contas / Parcelas a Receber
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS contas_receber (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -316,7 +314,7 @@ if tela_login():
 
         if perfil_usuario == "Admin":
             with st.expander("⚙️ Configurar e Editar Metas (Diária, Semanal e Mensal) por Categoria"):
-                st.write("Digite manualmente os valores de meta para cada categoria. Se a meta diária ou semanal ainda não tiver sido salva, o sistema trará uma sugestão inicial (semanal = mensal ÷ 4,33 | diária = mensal ÷ 22 dias úteis de seg. a sex.).")
+                st.write("Digite manualmente os valores de meta para cada categoria.")
                 
                 with st.form("form_metas_completas"):
                     novas_metas_diarias = {}
@@ -340,8 +338,8 @@ if tela_login():
                         val_s_default = m_semanal_cad if m_semanal_cad > 0 else sugestao_semanal
                         val_d_default = m_diaria_cad if m_diaria_cad > 0 else sugestao_diaria
                         
-                        val_s = c2.number_input(f"Meta Semanal ({cat})", value=val_s_default, step=100.0, key=f"s_{cat}", help="Livre para edição manual")
-                        val_d = c3.number_input(f"Meta Diária ({cat})", value=val_d_default, step=50.0, key=f"d_{cat}", help="Livre para edição manual (segunda a sexta)")
+                        val_s = c2.number_input(f"Meta Semanal ({cat})", value=val_s_default, step=100.0, key=f"s_{cat}")
+                        val_d = c3.number_input(f"Meta Diária ({cat})", value=val_d_default, step=50.0, key=f"d_{cat}")
                         
                         novas_metas_mensais[cat] = val_m
                         novas_metas_semanais[cat] = val_s
@@ -456,7 +454,6 @@ if tela_login():
                 despesas = st.number_input("Despesas Previstas (R$)", value=0.0, step=50.0)
                 data_contato = st.date_input("Data do Fechamento / Contato", value=date.today())
                 
-                # Opção de gerar recebível automaticamente se já for aprovado
                 gerar_recebivel = st.checkbox("Gerar automaticamente lançamento de Conta a Receber (vencimento hoje)", value=True)
 
                 if st.form_submit_button("Salvar Atendimento"):
@@ -481,7 +478,7 @@ if tela_login():
                     st.success("Atendimento registrado no banco de dados!")
 
     # ----------------------------------------------------
-    # GESTÃO DE ATENDIMENTOS (COM EXPORTAÇÃO PDF)
+    # GESTÃO DE ATENDIMENTOS
     # ----------------------------------------------------
     elif menu == "Gestão de Atendimentos":
         st.header("📋 Gestão e Atualização do Funil de Atendimentos")
@@ -544,7 +541,7 @@ if tela_login():
                         st.rerun()
 
     # ----------------------------------------------------
-    # CONTAS E PARCELAS A RECEBER
+    # CONTAS E PARCELAS A RECEBER (COM BOTÕES DE EDITAR E EXCLUIR)
     # ----------------------------------------------------
     elif menu == "Contas e Parcelas a Receber":
         st.header("💵 Lançamento e Controle de Contas a Receber")
@@ -582,7 +579,7 @@ if tela_login():
             st.subheader("📋 Lista de Recebimentos Previstos e Efetuados")
             conn = conectar()
             query_rec = """
-            SELECT cr.id, c.nome as Cliente, cr.descricao as Descrição, cr.valor as [Valor (R$)], 
+            SELECT cr.id, cr.cliente_id, c.nome as Cliente, cr.descricao as Descrição, cr.valor as [Valor (R$)], 
                    cr.data_vencimento as [Vencimento], cr.status as Status
             FROM contas_receber cr
             LEFT JOIN clientes c ON cr.cliente_id = c.id
@@ -592,11 +589,82 @@ if tela_login():
             conn.close()
 
             if not df_rec.empty:
-                st.dataframe(df_rec, use_container_width=True)
-                
-                # Dar baixa/dar como recebido
+                # Cabeçalho da tabela interativa
+                c_id, c_cli, c_desc, c_val, c_venc, c_stat, c_edt, c_del = st.columns([0.6, 2, 2, 1.2, 1.2, 1, 0.8, 0.8])
+                c_id.markdown("**ID**")
+                c_cli.markdown("**Cliente**")
+                c_desc.markdown("**Descrição**")
+                c_val.markdown("**Valor (R$)**")
+                c_venc.markdown("**Vencimento**")
+                c_stat.markdown("**Status**")
+                c_edt.markdown("**Editar**")
+                c_del.markdown("**Excluir**")
                 st.divider()
-                st.subheader("✅ Confirmar Recebimento / Dar Baixa")
+
+                for _, row in df_rec.iterrows():
+                    col_id, col_cli, col_desc, col_val, col_venc, col_stat, col_edt, col_del = st.columns([0.6, 2, 2, 1.2, 1.2, 1, 0.8, 0.8])
+                    
+                    col_id.write(row['id'])
+                    col_cli.write(row['Cliente'])
+                    col_desc.write(row['Descrição'] if row['Descrição'] else "-")
+                    col_val.write(f"R$ {row['Valor (R$)']:,.2f}")
+                    col_venc.write(row['Vencimento'])
+                    col_stat.write(row['Status'])
+
+                    # Botão de Editar (Caneta ✏️)
+                    if col_edt.button("✏️", key=f"btn_edit_rec_{row['id']}"):
+                        st.session_state["edit_rec_id"] = row['id']
+                        st.rerun()
+
+                    # Botão de Excluir (Lixeira 🗑️)
+                    if col_del.button("🗑️", key=f"btn_del_rec_{row['id']}"):
+                        conn = conectar()
+                        cursor = conn.cursor()
+                        cursor.execute("DELETE FROM contas_receber WHERE id = ?", (row['id'],))
+                        conn.commit()
+                        conn.close()
+                        st.success(f"Lançamento ID #{row['id']} excluído com sucesso!")
+                        st.rerun()
+
+                # Formulário Inline para Editar Registro Selecionado
+                if "edit_rec_id" in st.session_state and st.session_state["edit_rec_id"] is not None:
+                    rec_id_edit = st.session_state["edit_rec_id"]
+                    registro_edit = df_rec[df_rec['id'] == rec_id_edit]
+
+                    if not registro_edit.empty:
+                        reg_e = registro_edit.iloc[0]
+                        st.divider()
+                        st.subheader(f"✏️ Editando Lançamento ID #{rec_id_edit}")
+                        
+                        with st.form("form_editar_recebimento"):
+                            e_desc = st.text_input("Descrição", value=reg_e['Descrição'] if reg_e['Descrição'] else "")
+                            e_val = st.number_input("Valor (R$)", value=float(reg_e['Valor (R$)']), step=50.0)
+                            
+                            venc_dt_obj = datetime.strptime(reg_e['Vencimento'], "%Y-%m-%d").date() if reg_e['Vencimento'] else date.today()
+                            e_venc = st.date_input("Vencimento", value=venc_dt_obj)
+                            e_stat = st.selectbox("Status", ["Pendente", "Recebido"], index=0 if reg_e['Status'] == 'Pendente' else 1)
+
+                            c_salvar, c_cancelar = st.columns(2)
+                            if c_salvar.form_submit_button("💾 Salvar Alterações"):
+                                conn = conectar()
+                                cursor = conn.cursor()
+                                cursor.execute("""
+                                UPDATE contas_receber 
+                                SET descricao = ?, valor = ?, data_vencimento = ?, status = ?
+                                WHERE id = ?
+                                """, (e_desc, e_val, str(e_venc), e_stat, rec_id_edit))
+                                conn.commit()
+                                conn.close()
+                                st.session_state["edit_rec_id"] = None
+                                st.success("Lançamento atualizado!")
+                                st.rerun()
+
+                            if c_cancelar.form_submit_button("❌ Cancelar"):
+                                st.session_state["edit_rec_id"] = None
+                                st.rerun()
+
+                st.divider()
+                st.subheader("✅ Confirmar Recebimento / Dar Baixa Rápida")
                 df_pendentes_rec = df_rec[df_rec['Status'] == 'Pendente']
                 
                 if not df_pendentes_rec.empty:
@@ -790,14 +858,12 @@ if tela_login():
             fim_semana = inicio_semana + timedelta(days=6)
             inicio_mes = hoje.replace(day=1)
             
-            # Cálculo dos dias no mês atual
             if hoje.month == 12:
                 proximo_mes = hoje.replace(year=hoje.year + 1, month=1, day=1)
             else:
                 proximo_mes = hoje.replace(month=hoje.month + 1, day=1)
             fim_mes = proximo_mes - timedelta(days=1)
 
-            # --- PROCESSAR RECEBIMENTOS PREVISTOS ---
             if not df_rec.empty:
                 df_rec['venc_dt'] = pd.to_datetime(df_rec['data_vencimento'], errors='coerce').dt.date
                 rec_hoje = df_rec[df_rec['venc_dt'] == hoje]['valor'].sum()
@@ -806,7 +872,6 @@ if tela_login():
             else:
                 rec_hoje = rec_semana = rec_mes = 0.0
 
-            # --- PROCESSAR DESPESAS PREVISTAS ---
             if not df_pag.empty:
                 df_pag['venc_dt'] = pd.to_datetime(df_pag['data_vencimento'], errors='coerce').dt.date
                 pag_hoje = df_pag[df_pag['venc_dt'] == hoje]['valor'].sum()
