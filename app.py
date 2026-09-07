@@ -808,5 +808,3 @@ if tela_login():
             df_users = pd.read_sql_query("SELECT id, nome, usuario, perfil FROM usuarios", conn)
             conn.close()
             st.dataframe(df_users, use_container_width=True)
-                           
-                              
