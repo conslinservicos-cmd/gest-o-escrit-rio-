@@ -250,9 +250,10 @@ if tela_login():
 
         if not df_atendimentos.empty:
             df_atendimentos['data_dt'] = pd.to_datetime(df_atendimentos['data_contato'], errors='coerce').dt.date
-            df_aprovados = df_atendimentos[df_atendimentos['status'].isin(["Aprovado / Execução", "Concluído"])].copy()
+            status_validos = ["Aprovado / Execução", "Concluído", "Em Orçamento"]
+            df_aprovados = df_atendimentos[df_atendimentos['status'].isin(status_validos)].copy()
         else:
-            df_aprovados = pd.DataFrame(columns=['categoria', 'valor_fechado', 'data_dt'])
+            df_aprovados = pd.DataFrame(columns=['categoria', 'valor_fechado', 'valor_orcamento', 'data_dt'])
 
         hoje = date.today()
         inicio_semana = hoje - timedelta(days=hoje.weekday())
@@ -281,10 +282,15 @@ if tela_login():
                         st.rerun()
 
         st.subheader("📊 Resumo Geral")
-        val_hoje = df_aprovados[df_aprovados['data_dt'] == hoje]['valor_fechado'].sum() if not df_aprovados.empty else 0.0
-        val_semana = df_aprovados[df_aprovados['data_dt'] >= inicio_semana]['valor_fechado'].sum() if not df_aprovados.empty else 0.0
-        val_mes = df_aprovados[df_aprovados['data_dt'] >= inicio_mes]['valor_fechado'].sum() if not df_aprovados.empty else 0.0
-        val_ano = df_aprovados[df_aprovados['data_dt'] >= inicio_ano]['valor_fechado'].sum() if not df_aprovados.empty else 0.0
+        if not df_aprovados.empty:
+            df_aprovados['valor_real'] = df_aprovados.apply(lambda r: r['valor_fechado'] if r['valor_fechado'] > 0 else r['valor_orcamento'], axis=1)
+            
+            val_hoje = df_aprovados[df_aprovados['data_dt'] == hoje]['valor_real'].sum()
+            val_semana = df_aprovados[df_aprovados['data_dt'] >= inicio_semana]['valor_real'].sum()
+            val_mes = df_aprovados[df_aprovados['data_dt'] >= inicio_mes]['valor_real'].sum()
+            val_ano = df_aprovados[df_aprovados['data_dt'] >= inicio_ano]['valor_real'].sum()
+        else:
+            val_hoje = val_semana = val_mes = val_ano = 0.0
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Vendas Hoje", f"R$ {val_hoje:,.2f}")
@@ -404,12 +410,14 @@ if tela_login():
                     """, (c_id, categoria, descricao, status, valor_orcamento, valor_fechado, despesas, str(data_contato)))
                     
                     at_id = cursor.lastrowid
-                    if gerar_rec and status in ["Aprovado / Execução", "Concluído"] and valor_fechado > 0:
+                    val_para_receber = valor_fechado if valor_fechado > 0 else valor_orcamento
+                    if gerar_rec and status in ["Aprovado / Execução", "Concluído", "Em Orçamento"] and val_para_receber > 0:
                         cursor.execute("INSERT INTO contas_receber (cliente_id, atendimento_id, descricao, valor, data_vencimento, status) VALUES (?, ?, ?, ?, ?, 'Pendente')",
-                                       (c_id, at_id, f"Fechamento - {categoria}", valor_fechado, str(data_contato)))
+                                       (c_id, at_id, f"Fechamento - {categoria}", val_para_receber, str(data_contato)))
 
                     conn.commit(); conn.close()
                     st.success("Atendimento gravado!")
+                    st.rerun()
 
     # ----------------------------------------------------
     # GESTÃO DE ATENDIMENTOS (COM EDITAR E EXCLUIR)
