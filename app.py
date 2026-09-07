@@ -299,7 +299,7 @@ if tela_login():
 
         if perfil_usuario == "Admin":
             with st.expander("⚙️ Configurar e Editar Metas (Diária, Semanal e Mensal) por Categoria"):
-                st.write("Digite manualmente os valores de meta para cada subcategoria. Se os valores diários/semanais estiverem zerados, o sistema exibirá uma sugestão proporcional aos 7 dias da semana.")
+                st.write("Digite manualmente os valores de meta para cada categoria. Se a meta diária ou semanal ainda não tiver sido salva, o sistema trará uma sugestão inicial (semanal = mensal ÷ 4,33 | diária = mensal ÷ 22 dias úteis de seg. a sex.).")
                 
                 with st.form("form_metas_completas"):
                     novas_metas_diarias = {}
@@ -307,26 +307,25 @@ if tela_login():
                     novas_metas_mensais = {}
                     
                     for cat in CATEGORIAS:
-                        st.markdown(f"**📍 Subcategoria: {cat}**")
+                        st.markdown(f"**📍 Categoria: {cat}**")
                         row_cat = df_metas[df_metas['categoria'] == cat] if not df_metas.empty and cat in df_metas['categoria'].values else pd.DataFrame()
                         
                         m_mensal_cad = float(row_cat['meta_valor'].values[0]) if not row_cat.empty and 'meta_valor' in row_cat.columns else 0.0
                         m_semanal_cad = float(row_cat['meta_semanal'].values[0]) if not row_cat.empty and 'meta_semanal' in row_cat.columns else 0.0
                         m_diaria_cad = float(row_cat['meta_diaria'].values[0]) if not row_cat.empty and 'meta_diaria' in row_cat.columns else 0.0
                         
-                        # Cálculo da Sugestão Inicial (baseado em 30 dias corridos / 4.33 semanas)
+                        # Cálculos da Sugestão Inicial (4.33 semanas / 22 dias úteis de segunda a sexta)
                         sugestao_semanal = round(m_mensal_cad / 4.33, 2) if m_mensal_cad > 0 else 0.0
-                        sugestao_diaria = round(m_mensal_cad / 30.0, 2) if m_mensal_cad > 0 else 0.0
+                        sugestao_diaria = round(m_mensal_cad / 22.0, 2) if m_mensal_cad > 0 else 0.0
 
                         c1, c2, c3 = st.columns(3)
                         val_m = c1.number_input(f"Meta Mensal ({cat})", value=m_mensal_cad, step=500.0, key=f"m_{cat}")
                         
-                        # Preenche com o valor salvo ou com a sugestão calculada
                         val_s_default = m_semanal_cad if m_semanal_cad > 0 else sugestao_semanal
                         val_d_default = m_diaria_cad if m_diaria_cad > 0 else sugestao_diaria
                         
                         val_s = c2.number_input(f"Meta Semanal ({cat})", value=val_s_default, step=100.0, key=f"s_{cat}", help="Livre para edição manual")
-                        val_d = c3.number_input(f"Meta Diária ({cat})", value=val_d_default, step=50.0, key=f"d_{cat}", help="Livre para edição manual (segunda a domingo)")
+                        val_d = c3.number_input(f"Meta Diária ({cat})", value=val_d_default, step=50.0, key=f"d_{cat}", help="Livre para edição manual (segunda a sexta)")
                         
                         novas_metas_mensais[cat] = val_m
                         novas_metas_semanais[cat] = val_s
@@ -365,7 +364,7 @@ if tela_login():
         col_a.metric("Acumulado do Ano", f"R$ {val_ano:,.2f}")
 
         st.divider()
-        st.subheader("🎯 Atingimento de Metas por Subcategoria")
+        st.subheader("🎯 Atingimento de Metas por Categoria")
         
         visao_periodo = st.radio("Selecione a meta que deseja comparar:", ["Meta Diária (Hoje)", "Meta Semanal (Semana Atual)", "Meta Mensal (Mês Vigente)"], horizontal=True)
 
@@ -784,3 +783,4 @@ if tela_login():
                             else:
                                 conn.close()
                                 st.error("Sua senha atual está incorreta.")
+                              
