@@ -587,7 +587,7 @@ if tela_login():
         st.info('Nenhuma despesa no período.')
 
   # ----------------------------------------------------
-  # CADASTRO DE CLIENTES
+  # CADASTRO DE CLIENTES (COM EDITAR ✏️ E EXCLUIR 🗑️)
   # ----------------------------------------------------
   elif menu == 'Cadastro de Clientes':
     st.header('👤 Cadastro e Gestão de Clientes')
@@ -617,8 +617,77 @@ if tela_login():
     conn = conectar()
     df_cli = pd.read_sql_query('SELECT * FROM clientes', conn)
     conn.close()
+
     if not df_cli.empty:
       st.dataframe(df_cli, use_container_width=True)
+
+      st.divider()
+      st.subheader('✏️ Editar ou 🗑️ Excluir Cliente')
+      opcoes_cli = [
+          f"ID {row['id']} - {row['nome']}" for _, row in df_cli.iterrows()
+      ]
+      cli_sel = st.selectbox('Selecione um Cliente', opcoes_cli)
+
+      if cli_sel:
+        id_cli = int(cli_sel.split(' ')[1])
+        dados_cli = df_cli[df_cli['id'] == id_cli].iloc[0]
+
+        tab_edit_cli, tab_del_cli = st.tabs(['✏️ Editar Dados', '🗑️ Excluir'])
+
+        with tab_edit_cli:
+          with st.form(f'form_edit_cli_{id_cli}'):
+            edit_nome = st.text_input(
+                'Nome / Razão Social', value=str(dados_cli['nome'])
+            )
+            edit_tel = st.text_input(
+                'Telefone / WhatsApp', value=str(dados_cli['telefone'] or '')
+            )
+            edit_email = st.text_input(
+                'E-mail', value=str(dados_cli['email'] or '')
+            )
+            edit_cpf = st.text_input(
+                'CPF/CNPJ', value=str(dados_cli['cpf_cnpj'] or '')
+            )
+            edit_end = st.text_area(
+                'Endereço', value=str(dados_cli['endereco'] or '')
+            )
+
+            if st.form_submit_button('💾 Salvar Alterações'):
+              conn = conectar()
+              cursor = conn.cursor()
+              cursor.execute(
+                  """
+                                UPDATE clientes 
+                                SET nome = ?, telefone = ?, email = ?, cpf_cnpj = ?, endereco = ?
+                                WHERE id = ?
+                            """,
+                  (
+                      edit_nome,
+                      edit_tel,
+                      edit_email,
+                      edit_cpf,
+                      edit_end,
+                      id_cli,
+                  ),
+              )
+              conn.commit()
+              conn.close()
+              st.success('Cliente atualizado com sucesso!')
+              st.rerun()
+
+        with tab_del_cli:
+          st.warning(
+              '⚠️ Apagar este cliente pode afetar o histórico de atendimentos'
+              ' vinculados.'
+          )
+          if st.button('🔥 Confirmar Exclusão do Cliente', key=f'del_cli_{id_cli}'):
+            conn = conectar()
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM clientes WHERE id = ?', (id_cli,))
+            conn.commit()
+            conn.close()
+            st.success('Cliente excluído com sucesso!')
+            st.rerun()
     else:
       st.info('Nenhum cliente cadastrado.')
 
@@ -696,7 +765,7 @@ if tela_login():
           st.rerun()
 
   # ----------------------------------------------------
-  # GESTÃO DE ATENDIMENTOS (COM EDITAR ✏️ E EXCLUIR 🗑️)
+  # GESTÃO DE ATENDIMENTOS (EDITAR ✏️ E EXCLUIR 🗑️)
   # ----------------------------------------------------
   elif menu == 'Gestão de Atendimentos':
     st.header('📋 Gestão e Edição de Atendimentos')
@@ -777,7 +846,6 @@ if tela_login():
                   ),
               )
 
-              # Atualiza ou insere parcela a receber caso aprovado
               if stat_edit in ['Aprovado / Execução', 'Concluído'] and fec_edit > 0:
                 cursor.execute(
                     'SELECT id FROM contas_receber WHERE atendimento_id = ?',
@@ -848,7 +916,7 @@ if tela_login():
       st.info('Nenhum atendimento cadastrado.')
 
   # ----------------------------------------------------
-  # CONTAS E PARCELAS A RECEBER
+  # CONTAS E PARCELAS A RECEBER (EDITAR ✏️ E EXCLUIR 🗑️)
   # ----------------------------------------------------
   elif menu == 'Contas e Parcelas a Receber':
     st.header('📥 Contas e Parcelas a Receber')
@@ -897,13 +965,86 @@ if tela_login():
           conn.close()
           st.success('Pagamento registrado com sucesso!')
           st.rerun()
-      else:
-        st.info('Não há títulos pendentes de recebimento no momento.')
+
+      st.divider()
+      st.subheader('✏️ Editar ou 🗑️ Excluir Parcela a Receber')
+      lista_todas_rec = [
+          f"ID {r['id']} - {r['descricao']} - R$ {r['valor']:,.2f} ({r['status']})"
+          for _, r in df_rec.iterrows()
+      ]
+      rec_sel = st.selectbox(
+          'Selecione uma Parcela para Modificar', lista_todas_rec
+      )
+
+      if rec_sel:
+        id_rec_mod = int(rec_sel.split(' ')[1])
+        dados_rec = df_rec[df_rec['id'] == id_rec_mod].iloc[0]
+
+        tab_edit_rec, tab_del_rec = st.tabs(['✏️ Editar Dados', '🗑️ Excluir'])
+
+        with tab_edit_rec:
+          with st.form(f'form_edit_rec_{id_rec_mod}'):
+            edit_desc_r = st.text_input(
+                'Descrição', value=str(dados_rec['descricao'])
+            )
+            edit_val_r = st.number_input(
+                'Valor (R$)', value=float(dados_rec['valor'])
+            )
+            edit_venc_r = st.date_input(
+                'Vencimento',
+                datetime.strptime(
+                    dados_rec['data_vencimento'], '%Y-%m-%d'
+                ).date()
+                if dados_rec['data_vencimento']
+                else date.today(),
+            )
+            edit_status_r = st.selectbox(
+                'Status',
+                ['Pendente', 'Pago'],
+                index=0 if dados_rec['status'] == 'Pendente' else 1,
+            )
+
+            if st.form_submit_button('💾 Salvar Alterações'):
+              conn = conectar()
+              cursor = conn.cursor()
+              cursor.execute(
+                  """
+                                UPDATE contas_receber
+                                SET descricao = ?, valor = ?, data_vencimento = ?, status = ?
+                                WHERE id = ?
+                            """,
+                  (
+                      edit_desc_r,
+                      edit_val_r,
+                      edit_venc_r,
+                      edit_status_r,
+                      id_rec_mod,
+                  ),
+              )
+              conn.commit()
+              conn.close()
+              st.success('Registro de recebimento atualizado!')
+              st.rerun()
+
+        with tab_del_rec:
+          st.warning(
+              '⚠️ Deseja apagar este registro de conta a receber?'
+          )
+          if st.button('🔥 Confirmar Exclusão', key=f'del_rec_{id_rec_mod}'):
+            conn = conectar()
+            cursor = conn.cursor()
+            cursor.execute(
+                'DELETE FROM contas_receber WHERE id = ?', (id_rec_mod,)
+            )
+            conn.commit()
+            conn.close()
+            st.success('Registro excluído com sucesso!')
+            st.rerun()
     else:
       st.info('Nenhuma parcela cadastrada no Contas a Receber.')
 
   # ----------------------------------------------------
-  # PRESTADORES & FORNECEDORES
+  # PRESTADORES & FORNECEDORES (EDITAR ✏️ E EXCLUIR 🗑️)
   # ----------------------------------------------------
   elif menu == 'Prestadores & Fornecedores':
     st.header('🤝 Gestão de Parceiros, Prestadores & Fornecedores')
@@ -941,11 +1082,75 @@ if tela_login():
 
     if not df_parc.empty:
       st.dataframe(df_parc, use_container_width=True)
+
+      st.divider()
+      st.subheader('✏️ Editar ou 🗑️ Excluir Parceiro')
+      opcoes_parc = [
+          f"ID {row['id']} - {row['nome']} ({row['tipo']})"
+          for _, row in df_parc.iterrows()
+      ]
+      parc_sel = st.selectbox('Selecione um Parceiro', opcoes_parc)
+
+      if parc_sel:
+        id_parc = int(parc_sel.split(' ')[1])
+        dados_parc = df_parc[df_parc['id'] == id_parc].iloc[0]
+
+        tab_edit_p, tab_del_p = st.tabs(['✏️ Editar Dados', '🗑️ Excluir'])
+
+        with tab_edit_p:
+          with st.form(f'form_edit_parc_{id_parc}'):
+            ep_nome = st.text_input('Nome', value=str(dados_parc['nome']))
+            ep_tipo = st.selectbox(
+                'Tipo',
+                TIPOS_PARCEIROS,
+                index=TIPOS_PARCEIROS.index(dados_parc['tipo'])
+                if dados_parc['tipo'] in TIPOS_PARCEIROS
+                else 0,
+            )
+            ep_tel = st.text_input(
+                'Telefone', value=str(dados_parc['telefone'] or '')
+            )
+            ep_cpf = st.text_input(
+                'CPF/CNPJ', value=str(dados_parc['cpf_cnpj'] or '')
+            )
+            ep_pix = st.text_input(
+                'Chave PIX', value=str(dados_parc['chave_pix'] or '')
+            )
+            ep_obs = st.text_area(
+                'Observações', value=str(dados_parc['observacao'] or '')
+            )
+
+            if st.form_submit_button('💾 Salvar Alterações'):
+              conn = conectar()
+              cursor = conn.cursor()
+              cursor.execute(
+                  """
+                                UPDATE parceiros
+                                SET nome = ?, tipo = ?, telefone = ?, cpf_cnpj = ?, chave_pix = ?, observacao = ?
+                                WHERE id = ?
+                            """,
+                  (ep_nome, ep_tipo, ep_tel, ep_cpf, ep_pix, ep_obs, id_parc),
+              )
+              conn.commit()
+              conn.close()
+              st.success('Parceiro atualizado com sucesso!')
+              st.rerun()
+
+        with tab_del_p:
+          st.warning('⚠️ Apagar este parceiro excluirá o cadastro do sistema.')
+          if st.button('🔥 Confirmar Exclusão', key=f'del_parc_{id_parc}'):
+            conn = conectar()
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM parceiros WHERE id = ?', (id_parc,))
+            conn.commit()
+            conn.close()
+            st.success('Parceiro excluído com sucesso!')
+            st.rerun()
     else:
       st.info('Nenhum parceiro cadastrado.')
 
   # ----------------------------------------------------
-  # CONTAS A PAGAR, DÍVIDAS & ACORDOS
+  # CONTAS A PAGAR, DÍVIDAS & ACORDOS (EDITAR ✏️ E EXCLUIR 🗑️)
   # ----------------------------------------------------
   elif menu == 'Contas a Pagar, Dívidas & Acordos':
     st.header('📤 Lançamento de Contas a Pagar, Dívidas e Acordos')
@@ -992,7 +1197,7 @@ if tela_login():
     conn = conectar()
     df_cp = pd.read_sql_query(
         """
-            SELECT cp.id, p.nome as parceiro, cp.tipo_conta, cp.descricao, cp.valor, cp.data_vencimento, cp.status
+            SELECT cp.id, p.nome as parceiro, cp.tipo_conta, cp.descricao, cp.valor, cp.data_vencimento, cp.status, cp.parceiro_id
             FROM contas_pagar cp
             LEFT JOIN parceiros p ON cp.parceiro_id = p.id
         """,
@@ -1001,7 +1206,92 @@ if tela_login():
     conn.close()
 
     if not df_cp.empty:
-      st.dataframe(df_cp, use_container_width=True)
+      st.dataframe(
+          df_cp.drop(columns=['parceiro_id']), use_container_width=True
+      )
+
+      st.divider()
+      st.subheader('✏️ Editar ou 🗑️ Excluir Conta a Pagar')
+      opcoes_cp = [
+          f"ID {r['id']} - {r['descricao']} - R$ {r['valor']:,.2f} ({r['status']})"
+          for _, r in df_cp.iterrows()
+      ]
+      cp_sel = st.selectbox('Selecione uma Conta para Modificar', opcoes_cp)
+
+      if cp_sel:
+        id_cp_mod = int(cp_sel.split(' ')[1])
+        dados_cp = df_cp[df_cp['id'] == id_cp_mod].iloc[0]
+
+        tab_edit_cp, tab_del_cp = st.tabs(['✏️ Editar Dados', '🗑️ Excluir'])
+
+        with tab_edit_cp:
+          with st.form(f'form_edit_cp_{id_cp_mod}'):
+            ecp_desc = st.text_input(
+                'Descrição', value=str(dados_cp['descricao'])
+            )
+            ecp_tipo = st.selectbox(
+                'Tipo da Conta',
+                TIPOS_CONTAS,
+                index=TIPOS_CONTAS.index(dados_cp['tipo_conta'])
+                if dados_cp['tipo_conta'] in TIPOS_CONTAS
+                else 0,
+            )
+            ecp_val = st.number_input(
+                'Valor (R$)', value=float(dados_cp['valor'])
+            )
+            ecp_venc = st.date_input(
+                'Vencimento',
+                datetime.strptime(
+                    dados_cp['data_vencimento'], '%Y-%m-%d'
+                ).date()
+                if dados_cp['data_vencimento']
+                else date.today(),
+            )
+            ecp_status = st.selectbox(
+                'Status',
+                ['Pendente', 'Pago'],
+                index=0 if dados_cp['status'] == 'Pendente' else 1,
+            )
+
+            if st.form_submit_button('💾 Salvar Alterações'):
+              conn = conectar()
+              cursor = conn.cursor()
+              cursor.execute(
+                  """
+                                UPDATE contas_pagar
+                                SET descricao = ?, tipo_conta = ?, valor = ?, data_vencimento = ?, status = ?
+                                WHERE id = ?
+                            """,
+                  (
+                      ecp_desc,
+                      ecp_tipo,
+                      ecp_val,
+                      ecp_venc,
+                      ecp_status,
+                      id_cp_mod,
+                  ),
+              )
+              conn.commit()
+              conn.close()
+              st.success('Conta a pagar atualizada com sucesso!')
+              st.rerun()
+
+        with tab_del_cp:
+          st.warning(
+              '⚠️ Deseja excluir este registro de conta a pagar?'
+          )
+          if st.button('🔥 Confirmar Exclusão', key=f'del_cp_{id_cp_mod}'):
+            conn = conectar()
+            cursor = conn.cursor()
+            cursor.execute(
+                'DELETE FROM contas_pagar WHERE id = ?', (id_cp_mod,)
+            )
+            conn.commit()
+            conn.close()
+            st.success('Conta excluída com sucesso!')
+            st.rerun()
+    else:
+      st.info('Nenhuma conta a pagar cadastrada.')
 
   # ----------------------------------------------------
   # REGISTRAR PAGAMENTOS
