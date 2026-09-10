@@ -184,29 +184,6 @@ def criar_tabelas():
     )
     """)
 
-  cursor.execute("""
-    CREATE TABLE IF NOT EXISTS contas_receber (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cliente_id INTEGER,
-        atendimento_id INTEGER,
-        descricao TEXT NOT NULL,
-        valor REAL NOT NULL,
-        data_vencimento DATE NOT NULL,
-        data_pagamento DATE,
-        status TEXT NOT NULL DEFAULT 'Pendente',
-        FOREIGN KEY (cliente_id) REFERENCES clientes (id),
-        FOREIGN KEY (atendimento_id) REFERENCES atendimentos (id)
-    )
-    """)
-
-  # --- MIGRAÇÃO AUTOMÁTICA DE BANCO DE DADOS (CORRIGE O ERRO DE COLUNA FALTANTE) ---
-  cursor.execute("PRAGMA table_info(contas_receber)")
-  colunas_cr = [col[1] for col in cursor.fetchall()]
-  if 'atendimento_id' not in colunas_cr:
-    cursor.execute(
-        'ALTER TABLE contas_receber ADD COLUMN atendimento_id INTEGER'
-    )
-
   categorias = [
       'Documentação',
       'Pequenos Serviços',
@@ -324,7 +301,6 @@ if tela_login():
           'Cadastro de Clientes',
           'Novo Atendimento / Orçamento',
           'Gestão de Atendimentos',
-          'Contas e Parcelas a Receber',
       ],
       'Admin': [
           'Dashboard & Metas',
@@ -332,7 +308,6 @@ if tela_login():
           'Cadastro de Clientes',
           'Novo Atendimento / Orçamento',
           'Gestão de Atendimentos',
-          'Contas e Parcelas a Receber',
           'Prestadores & Fornecedores',
           'Contas a Pagar, Dívidas & Acordos',
           'Registrar Pagamentos',
@@ -500,9 +475,7 @@ if tela_login():
     st.header('📈 Previsão de Entradas, Despesas e Saldo Projetado')
 
     conn = conectar()
-    df_rec = pd.read_sql_query(
-        "SELECT * FROM contas_receber WHERE status = 'Pendente'", conn
-    )
+    df_atend = pd.read_sql_query('SELECT * FROM atendimentos', conn)
     df_pag = pd.read_sql_query(
         "SELECT * FROM contas_pagar WHERE status = 'Pendente'", conn
     )
@@ -520,13 +493,16 @@ if tela_login():
         horizontal=True,
     )
 
-    if not df_rec.empty:
-      df_rec['venc_dt'] = pd.to_datetime(
-          df_rec['data_vencimento'], errors='coerce'
+    if not df_atend.empty:
+      df_atend['venc_dt'] = pd.to_datetime(
+          df_atend['data_contato'], errors='coerce'
       ).dt.date
+      rec_filtrado_base = df_atend[
+          df_atend['status'].isin(['Aprovado / Execução', 'Concluído'])
+      ].copy()
     else:
-      df_rec = pd.DataFrame(
-          columns=['descricao', 'valor', 'data_vencimento', 'venc_dt']
+      rec_filtrado_base = pd.DataFrame(
+          columns=['categoria', 'valor_fechado', 'data_contato', 'venc_dt']
       )
 
     if not df_pag.empty:
@@ -539,26 +515,29 @@ if tela_login():
       )
 
     if opcao_periodo == 'Visão do Dia (Hoje)':
-      rec_filtrado = df_rec[df_rec['venc_dt'] == hoje]
+      rec_filtrado = rec_filtrado_base[rec_filtrado_base['venc_dt'] == hoje]
       pag_filtrado = df_pag[df_pag['venc_dt'] == hoje]
     elif opcao_periodo == 'Visão da Semana (7 dias)':
-      rec_filtrado = df_rec[
-          (df_rec['venc_dt'] >= hoje) & (df_rec['venc_dt'] <= fim_semana)
+      rec_filtrado = rec_filtrado_base[
+          (rec_filtrado_base['venc_dt'] >= hoje)
+          & (rec_filtrado_base['venc_dt'] <= fim_semana)
       ]
       pag_filtrado = df_pag[
           (df_pag['venc_dt'] >= hoje) & (df_pag['venc_dt'] <= fim_semana)
       ]
     else:
-      rec_filtrado = df_rec[
-          (df_rec['venc_dt'] >= hoje.replace(day=1))
-          & (df_rec['venc_dt'] <= fim_mes)
+      rec_filtrado = rec_filtrado_base[
+          (rec_filtrado_base['venc_dt'] >= hoje.replace(day=1))
+          & (rec_filtrado_base['venc_dt'] <= fim_mes)
       ]
       pag_filtrado = df_pag[
           (df_pag['venc_dt'] >= hoje.replace(day=1))
           & (df_pag['venc_dt'] <= fim_mes)
       ]
 
-    total_entradas = rec_filtrado['valor'].sum() if not rec_filtrado.empty else 0.0
+    total_entradas = (
+        rec_filtrado['valor_fechado'].sum() if not rec_filtrado.empty else 0.0
+    )
     total_despesas = pag_filtrado['valor'].sum() if not pag_filtrado.empty else 0.0
     saldo_projetado = total_entradas - total_despesas
 
@@ -573,21 +552,33 @@ if tela_login():
 
     col_t1, col_t2 = st.columns(2)
     with col_t1:
-      st.markdown('### 📥 Entradas Previstas')
+      st.markdown('### 📥 Entradas Previstas (Atendimentos Fechados)')
       if not rec_filtrado.empty:
         st.dataframe(
-            rec_filtrado[['data_vencimento', 'descricao', 'valor']],
+            rec_filtrado[['data_contato', 'categoria', 'valor_fechado']].rename(
+                columns={
+                    'data_contato': 'Data',
+                    'categoria': 'Categoria',
+                    'valor_fechado': 'Valor (R$)',
+                }
+            ),
             use_container_width=True,
             hide_index=True,
         )
       else:
-        st.info('Nenhuma entrada no período.')
+        st.info('Nenhuma entrada prevista no período.')
 
     with col_t2:
-      st.markdown('### 📤 Despesas Previstas')
+      st.markdown('### 📤 Despesas Previstas (A Pagar)')
       if not pag_filtrado.empty:
         st.dataframe(
-            pag_filtrado[['data_vencimento', 'descricao', 'valor']],
+            pag_filtrado[['data_vencimento', 'descricao', 'valor']].rename(
+                columns={
+                    'data_vencimento': 'Vencimento',
+                    'descricao': 'Descrição',
+                    'valor': 'Valor (R$)',
+                }
+            ),
             use_container_width=True,
             hide_index=True,
         )
@@ -750,26 +741,9 @@ if tela_login():
                   dt_contato,
               ),
           )
-          atendimento_id = cursor.lastrowid
-
-          if status in ['Aprovado / Execução', 'Concluído'] and v_fec > 0:
-            cursor.execute(
-                """
-                            INSERT INTO contas_receber (cliente_id, atendimento_id, descricao, valor, data_vencimento, status)
-                            VALUES (?, ?, ?, ?, ?, 'Pendente')
-                        """,
-                (
-                    c_id,
-                    atendimento_id,
-                    f'Serviço: {categoria} ({cliente_sel})',
-                    v_fec,
-                    dt_contato,
-                ),
-            )
-
           conn.commit()
           conn.close()
-          st.success('Atendimento registrado e integrado ao Contas a Receber!')
+          st.success('Atendimento registrado com sucesso!')
           st.rerun()
 
   # ----------------------------------------------------
@@ -853,33 +827,6 @@ if tela_login():
                       id_atend,
                   ),
               )
-
-              if stat_edit in ['Aprovado / Execução', 'Concluído'] and fec_edit > 0:
-                cursor.execute(
-                    'SELECT id FROM contas_receber WHERE atendimento_id = ?',
-                    (id_atend,),
-                )
-                if cursor.fetchone():
-                  cursor.execute(
-                      'UPDATE contas_receber SET valor = ? WHERE'
-                      ' atendimento_id = ?',
-                      (fec_edit, id_atend),
-                  )
-                else:
-                  cursor.execute(
-                      """
-                                        INSERT INTO contas_receber (cliente_id, atendimento_id, descricao, valor, data_vencimento, status)
-                                        VALUES (?, ?, ?, ?, ?, 'Pendente')
-                                    """,
-                      (
-                          dados_atend['cliente_id'],
-                          id_atend,
-                          f"Serviço: {cat_edit} ({dados_atend['cliente']})",
-                          fec_edit,
-                          dados_atend['data_contato'],
-                      ),
-                  )
-
               conn.commit()
               conn.close()
               st.success('Atendimento atualizado com sucesso!')
@@ -910,10 +857,6 @@ if tela_login():
             conn = conectar()
             cursor = conn.cursor()
             cursor.execute(
-                'DELETE FROM contas_receber WHERE atendimento_id = ?',
-                (id_atend,),
-            )
-            cursor.execute(
                 'DELETE FROM atendimentos WHERE id = ?', (id_atend,)
             )
             conn.commit()
@@ -922,134 +865,6 @@ if tela_login():
             st.rerun()
     else:
       st.info('Nenhum atendimento cadastrado.')
-
-  # ----------------------------------------------------
-  # CONTAS E PARCELAS A RECEBER
-  # ----------------------------------------------------
-  elif menu == 'Contas e Parcelas a Receber':
-    st.header('📥 Contas e Parcelas a Receber')
-
-    conn = conectar()
-    df_rec = pd.read_sql_query(
-        """
-            SELECT r.id, c.nome as cliente, r.descricao, r.valor, r.data_vencimento, r.data_pagamento, r.status
-            FROM contas_receber r
-            LEFT JOIN clientes c ON r.cliente_id = c.id
-        """,
-        conn,
-    )
-    conn.close()
-
-    if not df_rec.empty:
-      st.dataframe(df_rec, use_container_width=True)
-
-      st.subheader('💵 Dar Baixa / Confirmar Recebimento')
-      pendentes = df_rec[df_rec['status'] == 'Pendente']
-
-      if not pendentes.empty:
-        lista_opcoes = [
-            f"ID {r['id']} - {r['cliente']} - R$ {r['valor']:,.2f} (Venc:"
-            f" {r['data_vencimento']})"
-            for _, r in pendentes.iterrows()
-        ]
-        opcao_sel = st.selectbox(
-            'Selecione o Título para Dar Baixa', lista_opcoes
-        )
-        id_rec = int(opcao_sel.split(' ')[1])
-        dt_pago = st.date_input('Data do Recebimento', date.today())
-
-        if st.button('✅ Confirmar Recebimento (Marcar como Pago)'):
-          conn = conectar()
-          cursor = conn.cursor()
-          cursor.execute(
-              """
-                        UPDATE contas_receber 
-                        SET status = 'Pago', data_pagamento = ? 
-                        WHERE id = ?
-                    """,
-              (dt_pago, id_rec),
-          )
-          conn.commit()
-          conn.close()
-          st.success('Pagamento registrado com sucesso!')
-          st.rerun()
-
-      st.divider()
-      st.subheader('✏️ Editar ou 🗑️ Excluir Parcela a Receber')
-      lista_todas_rec = [
-          f"ID {r['id']} - {r['descricao']} - R$ {r['valor']:,.2f} ({r['status']})"
-          for _, r in df_rec.iterrows()
-      ]
-      rec_sel = st.selectbox(
-          'Selecione uma Parcela para Modificar', lista_todas_rec
-      )
-
-      if rec_sel:
-        id_rec_mod = int(rec_sel.split(' ')[1])
-        dados_rec = df_rec[df_rec['id'] == id_rec_mod].iloc[0]
-
-        tab_edit_rec, tab_del_rec = st.tabs(['✏️ Editar Dados', '🗑️ Excluir'])
-
-        with tab_edit_rec:
-          with st.form(f'form_edit_rec_{id_rec_mod}'):
-            edit_desc_r = st.text_input(
-                'Descrição', value=str(dados_rec['descricao'])
-            )
-            edit_val_r = st.number_input(
-                'Valor (R$)', value=float(dados_rec['valor'])
-            )
-            edit_venc_r = st.date_input(
-                'Vencimento',
-                datetime.strptime(
-                    dados_rec['data_vencimento'], '%Y-%m-%d'
-                ).date()
-                if dados_rec['data_vencimento']
-                else date.today(),
-            )
-            edit_status_r = st.selectbox(
-                'Status',
-                ['Pendente', 'Pago'],
-                index=0 if dados_rec['status'] == 'Pendente' else 1,
-            )
-
-            if st.form_submit_button('💾 Salvar Alterações'):
-              conn = conectar()
-              cursor = conn.cursor()
-              cursor.execute(
-                  """
-                                UPDATE contas_receber
-                                SET descricao = ?, valor = ?, data_vencimento = ?, status = ?
-                                WHERE id = ?
-                            """,
-                  (
-                      edit_desc_r,
-                      edit_val_r,
-                      edit_venc_r,
-                      edit_status_r,
-                      id_rec_mod,
-                  ),
-              )
-              conn.commit()
-              conn.close()
-              st.success('Registro de recebimento atualizado!')
-              st.rerun()
-
-        with tab_del_rec:
-          st.warning(
-              '⚠️ Deseja apagar este registro de conta a receber?'
-          )
-          if st.button('🔥 Confirmar Exclusão', key=f'del_rec_{id_rec_mod}'):
-            conn = conectar()
-            cursor = conn.cursor()
-            cursor.execute(
-                'DELETE FROM contas_receber WHERE id = ?', (id_rec_mod,)
-            )
-            conn.commit()
-            conn.close()
-            st.success('Registro excluído com sucesso!')
-            st.rerun()
-    else:
-      st.info('Nenhuma parcela cadastrada no Contas a Receber.')
 
   # ----------------------------------------------------
   # PRESTADORES & FORNECEDORES
@@ -1368,14 +1183,18 @@ if tela_login():
     st.header('📊 Fluxo de Caixa e DRE (Realizado)')
 
     conn = conectar()
-    df_entradas = pd.read_sql_query(
-        "SELECT * FROM contas_receber WHERE status = 'Pago'", conn
+    df_atend_pagos = pd.read_sql_query(
+        "SELECT * FROM atendimentos WHERE status IN ('Aprovado / Execução',"
+        " 'Concluído')",
+        conn,
     )
     df_saidas = pd.read_sql_query('SELECT * FROM pagamentos', conn)
     conn.close()
 
     tot_entradas = (
-        df_entradas['valor'].sum() if not df_entradas.empty else 0.0
+        df_atend_pagos['valor_fechado'].sum()
+        if not df_atend_pagos.empty
+        else 0.0
     )
     tot_saidas = (
         df_saidas['valor_pago'].sum() if not df_saidas.empty else 0.0
@@ -1384,7 +1203,7 @@ if tela_login():
 
     st.subheader('📌 Demonstrativo Geral')
     c1, c2, c3 = st.columns(3)
-    c1.metric('🟢 Total Entradas Quitadas', f'R$ {tot_entradas:,.2f}')
+    c1.metric('🟢 Total Entradas (Atendimentos Fechados)', f'R$ {tot_entradas:,.2f}')
     c2.metric('🔴 Total Saídas Pagas', f'R$ {tot_saidas:,.2f}')
     c3.metric(
         '💵 Resultado Líquido',
