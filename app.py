@@ -79,7 +79,7 @@ def verificar_senha_hash(senha_digitada, hash_guardado):
 
 
 # ==========================================
-# BANCO DE DADOS
+# BANCO DE DADOS E MIGRAÇÕES
 # ==========================================
 def conectar():
   return sqlite3.connect('gestao_escritorio.db')
@@ -198,6 +198,14 @@ def criar_tabelas():
         FOREIGN KEY (atendimento_id) REFERENCES atendimentos (id)
     )
     """)
+
+  # --- MIGRAÇÃO AUTOMÁTICA DE BANCO DE DADOS (CORRIGE O ERRO DE COLUNA FALTANTE) ---
+  cursor.execute("PRAGMA table_info(contas_receber)")
+  colunas_cr = [col[1] for col in cursor.fetchall()]
+  if 'atendimento_id' not in colunas_cr:
+    cursor.execute(
+        'ALTER TABLE contas_receber ADD COLUMN atendimento_id INTEGER'
+    )
 
   categorias = [
       'Documentação',
@@ -587,7 +595,7 @@ if tela_login():
         st.info('Nenhuma despesa no período.')
 
   # ----------------------------------------------------
-  # CADASTRO DE CLIENTES (COM EDITAR ✏️ E EXCLUIR 🗑️)
+  # CADASTRO DE CLIENTES
   # ----------------------------------------------------
   elif menu == 'Cadastro de Clientes':
     st.header('👤 Cadastro e Gestão de Clientes')
@@ -765,7 +773,7 @@ if tela_login():
           st.rerun()
 
   # ----------------------------------------------------
-  # GESTÃO DE ATENDIMENTOS (EDITAR ✏️ E EXCLUIR 🗑️)
+  # GESTÃO DE ATENDIMENTOS
   # ----------------------------------------------------
   elif menu == 'Gestão de Atendimentos':
     st.header('📋 Gestão e Edição de Atendimentos')
@@ -916,7 +924,7 @@ if tela_login():
       st.info('Nenhum atendimento cadastrado.')
 
   # ----------------------------------------------------
-  # CONTAS E PARCELAS A RECEBER (EDITAR ✏️ E EXCLUIR 🗑️)
+  # CONTAS E PARCELAS A RECEBER
   # ----------------------------------------------------
   elif menu == 'Contas e Parcelas a Receber':
     st.header('📥 Contas e Parcelas a Receber')
@@ -1044,7 +1052,7 @@ if tela_login():
       st.info('Nenhuma parcela cadastrada no Contas a Receber.')
 
   # ----------------------------------------------------
-  # PRESTADORES & FORNECEDORES (EDITAR ✏️ E EXCLUIR 🗑️)
+  # PRESTADORES & FORNECEDORES
   # ----------------------------------------------------
   elif menu == 'Prestadores & Fornecedores':
     st.header('🤝 Gestão de Parceiros, Prestadores & Fornecedores')
@@ -1150,7 +1158,7 @@ if tela_login():
       st.info('Nenhum parceiro cadastrado.')
 
   # ----------------------------------------------------
-  # CONTAS A PAGAR, DÍVIDAS & ACORDOS (EDITAR ✏️ E EXCLUIR 🗑️)
+  # CONTAS A PAGAR, DÍVIDAS & ACORDOS
   # ----------------------------------------------------
   elif menu == 'Contas a Pagar, Dívidas & Acordos':
     st.header('📤 Lançamento de Contas a Pagar, Dívidas e Acordos')
