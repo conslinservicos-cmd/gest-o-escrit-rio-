@@ -312,6 +312,7 @@ if tela_login():
           'Contas a Pagar, Dívidas & Acordos',
           'Registrar Pagamentos',
           'Fluxo de Caixa & DRE',
+          'Gerenciar Usuários',
       ],
   }
 
@@ -1210,3 +1211,143 @@ if tela_login():
         f'R$ {lucro_liquido:,.2f}',
         delta_color='normal' if lucro_liquido >= 0 else 'inverse',
     )
+
+  # ----------------------------------------------------
+  # GERENCIAR USUÁRIOS (NOVO MÓDULO EXCLUSIVO ADMIN)
+  # ----------------------------------------------------
+  elif menu == 'Gerenciar Usuários':
+    st.header('👥 Gestão de Usuários e Acessos ao Sistema')
+
+    if perfil_usuario != 'Admin':
+      st.error(
+          'Acesso restrito apenas para administradores do sistema.'
+      )
+    else:
+      with st.form('form_novo_usuario'):
+        st.subheader('➕ Cadastrar Novo Usuário')
+        u_nome = st.text_input('Nome Completo *')
+        u_login = st.text_input('Nome de Usuário (login p/ entrar) *')
+        u_senha = st.text_input('Senha Inicial *', type='password')
+        u_perfil = st.selectbox('Perfil de Acesso', ['Atendente', 'Admin'])
+
+        if st.form_submit_button('💾 Cadastrar Usuário'):
+          if u_nome and u_login and u_senha:
+            try:
+              hash_s = gerar_hash_senha(u_senha)
+              conn = conectar()
+              cursor = conn.cursor()
+              cursor.execute(
+                  """
+                                INSERT INTO usuarios (nome, usuario, senha_hash, perfil)
+                                VALUES (?, ?, ?, ?)
+                            """,
+                  (u_nome, u_login.strip().lower(), hash_s, u_perfil),
+              )
+              conn.commit()
+              conn.close()
+              st.success(f'Usuário {u_nome} cadastrado com sucesso!')
+              st.rerun()
+            except sqlite3.IntegrityError:
+              st.error(
+                  'Este nome de usuário já existe. Escolha outro login.'
+              )
+          else:
+            st.error('Preencha todos os campos obrigatórios (*).')
+
+      st.divider()
+      st.subheader('📋 Usuários Cadastrados no Sistema')
+      conn = conectar()
+      df_users = pd.read_sql_query(
+          'SELECT id, nome, usuario, perfil FROM usuarios', conn
+      )
+      conn.close()
+
+      if not df_users.empty:
+        st.dataframe(df_users, use_container_width=True)
+
+        st.divider()
+        st.subheader('✏️ Editar ou 🗑️ Excluir Usuário')
+        opcoes_u = [
+            f"ID {r['id']} - {r['nome']} ({r['usuario']})"
+            for _, r in df_users.iterrows()
+        ]
+        user_sel = st.selectbox('Selecione um Usuário', opcoes_u)
+
+        if user_sel:
+          id_u = int(user_sel.split(' ')[1])
+          dados_u = df_users[df_users['id'] == id_u].iloc[0]
+
+          tab_ed_u, tab_del_u = st.tabs(['✏️ Alterar Senha / Dados', '🗑️ Excluir'])
+
+          with tab_ed_u:
+            with st.form(f'form_edit_user_{id_u}'):
+              eu_nome = st.text_input('Nome', value=str(dados_u['nome']))
+              eu_login = st.text_input(
+                  'Usuário (Login)', value=str(dados_u['usuario'])
+              )
+              eu_perfil = st.selectbox(
+                  'Perfil',
+                  ['Atendente', 'Admin'],
+                  index=0 if dados_u['perfil'] == 'Atendente' else 1,
+              )
+              eu_nova_senha = st.text_input(
+                  'Nova Senha (Deixe em branco para não alterar)',
+                  type='password',
+              )
+
+              if st.form_submit_button('💾 Salvar Alterações'):
+                conn = conectar()
+                cursor = conn.cursor()
+                if eu_nova_senha.strip():
+                  novo_hash = gerar_hash_senha(eu_nova_senha)
+                  cursor.execute(
+                      """
+                                        UPDATE usuarios 
+                                        SET nome = ?, usuario = ?, perfil = ?, senha_hash = ? 
+                                        WHERE id = ?
+                                    """,
+                      (
+                          eu_nome,
+                          eu_login.strip().lower(),
+                          eu_perfil,
+                          novo_hash,
+                          id_u,
+                      ),
+                  )
+                else:
+                  cursor.execute(
+                      """
+                                        UPDATE usuarios 
+                                        SET nome = ?, usuario = ?, perfil = ? 
+                                        WHERE id = ?
+                                    """,
+                      (
+                          eu_nome,
+                          eu_login.strip().lower(),
+                          eu_perfil,
+                          id_u,
+                      ),
+                  )
+                conn.commit()
+                conn.close()
+                st.success('Usuário atualizado com sucesso!')
+                st.rerun()
+
+          with tab_del_u:
+            st.warning(
+                '⚠️ Tem certeza de que deseja apagar este usuário do sistema?'
+            )
+            if id_u == user.get('id'):
+              st.error(
+                  'Você não pode excluir o seu próprio usuário logado no'
+                  ' momento.'
+              )
+            else:
+              if st.button('🔥 Confirmar Exclusão', key=f'del_u_{id_u}'):
+                conn = conectar()
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM usuarios WHERE id = ?', (id_u,))
+                conn.commit()
+                conn.close()
+                st.success('Usuário excluído com sucesso!')
+                st.rerun()
