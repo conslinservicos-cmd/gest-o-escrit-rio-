@@ -300,6 +300,7 @@ if tela_login():
           'Projeção e Fluxo por Período',
           'Cadastro de Clientes',
           'Novo Atendimento / Orçamento',
+          'Atendimentos de Hoje',
           'Gestão de Atendimentos',
       ],
       'Admin': [
@@ -307,6 +308,7 @@ if tela_login():
           'Projeção e Fluxo por Período',
           'Cadastro de Clientes',
           'Novo Atendimento / Orçamento',
+          'Atendimentos de Hoje',
           'Gestão de Atendimentos',
           'Prestadores & Fornecedores',
           'Contas a Pagar, Dívidas & Acordos',
@@ -748,10 +750,132 @@ if tela_login():
           st.rerun()
 
   # ----------------------------------------------------
-  # GESTÃO DE ATENDIMENTOS
+  # ATENDIMENTOS DE HOJE (NOVA ABA)
+  # ----------------------------------------------------
+  elif menu == 'Atendimentos de Hoje':
+    st.header(f'📅 Atendimentos Registrados Hoje ({date.today().strftime("%d/%m/%Y")})')
+
+    conn = conectar()
+    query_hoje = f"""
+            SELECT a.id, c.nome as cliente, a.categoria, a.status, a.valor_orcamento, a.valor_fechado, a.despesas, a.data_contato, a.descricao, a.cliente_id
+            FROM atendimentos a
+            LEFT JOIN clientes c ON a.cliente_id = c.id
+            WHERE a.data_contato = '{date.today()}'
+        """
+    df_hoje = pd.read_sql_query(query_hoje, conn)
+    conn.close()
+
+    if not df_hoje.empty:
+      st.dataframe(
+          df_hoje.drop(columns=['cliente_id']), use_container_width=True
+      )
+
+      st.divider()
+      st.subheader('✏️ Editar ou 🗑️ Excluir Atendimento de Hoje')
+
+      opcoes_hoje = [
+          f"ID {row['id']} - {row['cliente']} ({row['categoria']})"
+          for _, row in df_hoje.iterrows()
+      ]
+      atend_hoje_sel = st.selectbox('Selecione um Atendimento', opcoes_hoje)
+
+      if atend_hoje_sel:
+        id_h = int(atend_hoje_sel.split(' ')[1])
+        dados_h = df_hoje[df_hoje['id'] == id_h].iloc[0]
+
+        tab_edit_h, tab_pdf_h, tab_del_h = st.tabs(
+            ['✏️ Editar Dados', '📄 Exportar PDF', '🗑️ Excluir']
+        )
+
+        with tab_edit_h:
+          with st.form(f'edit_form_hoje_{id_h}'):
+            cat_eh = st.selectbox(
+                'Categoria',
+                CATEGORIAS,
+                index=CATEGORIAS.index(dados_h['categoria']),
+            )
+            stat_eh = st.selectbox(
+                'Status',
+                STATUS_OPCOES,
+                index=STATUS_OPCOES.index(dados_h['status']),
+            )
+            orc_eh = st.number_input(
+                'Valor Orçado', value=float(dados_h['valor_orcamento'])
+            )
+            fec_eh = st.number_input(
+                'Valor Fechado', value=float(dados_h['valor_fechado'])
+            )
+            desp_eh = st.number_input(
+                'Despesas', value=float(dados_h['despesas'])
+            )
+            desc_eh = st.text_area(
+                'Descrição', value=str(dados_h['descricao'] or '')
+            )
+
+            if st.form_submit_button('💾 Atualizar Atendimento'):
+              conn = conectar()
+              cursor = conn.cursor()
+              cursor.execute(
+                  """
+                                UPDATE atendimentos 
+                                SET categoria = ?, status = ?, valor_orcamento = ?, valor_fechado = ?, despesas = ?, descricao = ?
+                                WHERE id = ?
+                            """,
+                  (
+                      cat_eh,
+                      stat_eh,
+                      orc_eh,
+                      fec_eh,
+                      desp_eh,
+                      desc_eh,
+                      id_h,
+                  ),
+              )
+              conn.commit()
+              conn.close()
+              st.success('Atendimento atualizado com sucesso!')
+              st.rerun()
+
+        with tab_pdf_h:
+          pdf_bytes = gerar_pdf_atendimento(
+              dados_h['cliente'],
+              dados_h['categoria'],
+              dados_h['status'],
+              dados_h['valor_orcamento'],
+              dados_h['valor_fechado'],
+              dados_h['descricao'],
+          )
+          st.download_button(
+              '📥 Baixar Relatório PDF',
+              data=pdf_bytes,
+              file_name=f'atendimento_hoje_{id_h}.pdf',
+              mime='application/pdf',
+              key=f'pdf_h_{id_h}',
+          )
+
+        with tab_del_h:
+          st.warning(
+              '⚠️ Tem certeza de que deseja apagar permanentemente este'
+              ' registro?'
+          )
+          if st.button('🔥 Confirmar Exclusão', key=f'del_hoje_{id_h}'):
+            conn = conectar()
+            cursor = conn.cursor()
+            cursor.execute(
+                'DELETE FROM atendimentos WHERE id = ?', (id_h,)
+            )
+            conn.commit()
+            conn.close()
+            st.success('Registro excluído com sucesso!')
+            st.rerun()
+    else:
+      st.info('Nenhum atendimento registrado para a data de hoje.')
+
+  # ----------------------------------------------------
+  # GESTÃO DE ATENDIMENTOS (GERAL)
   # ----------------------------------------------------
   elif menu == 'Gestão de Atendimentos':
-    st.header('📋 Gestão e Edição de Atendimentos')
+    st.header('📋 Gestão e Edição de Atendimentos (Geral)')
 
     conn = conectar()
     query = """
@@ -1213,7 +1337,7 @@ if tela_login():
     )
 
   # ----------------------------------------------------
-  # GERENCIAR USUÁRIOS (NOVO MÓDULO EXCLUSIVO ADMIN)
+  # GERENCIAR USUÁRIOS
   # ----------------------------------------------------
   elif menu == 'Gerenciar Usuários':
     st.header('👥 Gestão de Usuários e Acessos ao Sistema')
