@@ -132,9 +132,16 @@ def criar_tabelas():
         valor_fechado REAL DEFAULT 0.0,
         despesas REAL DEFAULT 0.0,
         data_contato DATE DEFAULT CURRENT_DATE,
+        horario TEXT DEFAULT '08:00',
         FOREIGN KEY (cliente_id) REFERENCES clientes (id)
     )
     """)
+
+  # Migração automática caso a tabela atendimentos não tenha a coluna 'horario'
+  cursor.execute("PRAGMA table_info(atendimentos)")
+  colunas_atend = [col[1] for col in cursor.fetchall()]
+  if 'horario' not in colunas_atend:
+    cursor.execute("ALTER TABLE atendimentos ADD COLUMN horario TEXT DEFAULT '08:00'")
 
   cursor.execute("""
     CREATE TABLE IF NOT EXISTS metas (
@@ -722,6 +729,7 @@ if tela_login():
             'Despesas/Custos Diretos (R$)', min_value=0.0, step=50.0, value=0.0
         )
         dt_contato = st.date_input('Data do Atendimento', date.today())
+        hr_contato = st.text_input('Horário (Ex: 09:30)', value='09:00')
         desc = st.text_area('Descrição / Observações do Atendimento')
 
         if st.form_submit_button('💾 Salvar Atendimento'):
@@ -730,8 +738,8 @@ if tela_login():
           cursor = conn.cursor()
           cursor.execute(
               """
-                        INSERT INTO atendimentos (cliente_id, categoria, descricao, status, valor_orcamento, valor_fechado, despesas, data_contato)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO atendimentos (cliente_id, categoria, descricao, status, valor_orcamento, valor_fechado, despesas, data_contato, horario)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
               (
                   c_id,
@@ -742,6 +750,7 @@ if tela_login():
                   v_fec,
                   despesas,
                   dt_contato,
+                  hr_contato,
               ),
           )
           conn.commit()
@@ -750,34 +759,91 @@ if tela_login():
           st.rerun()
 
   # ----------------------------------------------------
-  # ATENDIMENTOS DE HOJE (NOVA ABA)
+  # ATENDIMENTOS DE HOJE (ESTILO AGENDA / PREENCHIMENTO MANUAL)
   # ----------------------------------------------------
   elif menu == 'Atendimentos de Hoje':
-    st.header(f'📅 Atendimentos Registrados Hoje ({date.today().strftime("%d/%m/%Y")})')
+    st.header(f'📅 Agenda de Hoje ({date.today().strftime("%d/%m/%Y")})')
+    st.markdown('Organize seus compromissos, reuniões e serviços do dia abaixo.')
+
+    conn = conectar()
+    clientes = pd.read_sql_query('SELECT id, nome FROM clientes', conn)
+    conn.close()
+
+    # Formulário estilo Google Agenda para adicionar compromisso direto para hoje
+    with st.expander('➕ Adicionar Novo Compromisso / Atendimento para Hoje'):
+      if clientes.empty:
+        st.warning('Cadastre pelo menos um cliente na aba "Cadastro de Clientes" para vincular aqui.')
+      else:
+        dict_clientes_h = dict(zip(clientes['nome'], clientes['id']))
+        with st.form('form_agenda_hoje'):
+          c1, c2 = st.columns(2)
+          h_cli = c1.selectbox('Cliente', list(dict_clientes_h.keys()), key='ag_cli')
+          h_hora = c2.text_input('Horário (Ex: 14:00)', value='10:00', key='ag_hora')
+
+          h_cat = st.selectbox('Categoria', CATEGORIAS, key='ag_cat')
+          h_stat = st.selectbox('Status', STATUS_OPCOES, key='ag_stat')
+
+          c3, c4 = st.columns(2)
+          h_orc = c3.number_input('Valor Orçado (R$)', min_value=0.0, step=100.0, value=0.0, key='ag_orc')
+          h_fec = c4.number_input('Valor Fechado (R$)', min_value=0.0, step=100.0, value=0.0, key='ag_fec')
+
+          h_desc = st.text_area('Descrição / Detalhes do Compromisso', key='ag_desc')
+
+          if st.form_submit_button('📅 Agendar na Agenda de Hoje'):
+            cid_h = dict_clientes_h[h_cli]
+            conn = conectar()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                            INSERT INTO atendimentos (cliente_id, categoria, descricao, status, valor_orcamento, valor_fechado, despesas, data_contato, horario)
+                            VALUES (?, ?, ?, ?, ?, ?, 0.0, ?, ?)
+                        """,
+                (cid_h, h_cat, h_desc, h_stat, h_orc, h_fec, date.today(), h_hora),
+            )
+            conn.commit()
+            conn.close()
+            st.success('Compromisso agendado com sucesso para hoje!')
+            st.rerun()
+
+    st.divider()
+    st.subheader('📋 Seus Compromissos Agendados para Hoje')
 
     conn = conectar()
     query_hoje = f"""
-            SELECT a.id, c.nome as cliente, a.categoria, a.status, a.valor_orcamento, a.valor_fechado, a.despesas, a.data_contato, a.descricao, a.cliente_id
+            SELECT a.id, a.horario, c.nome as cliente, a.categoria, a.status, a.valor_fechado, a.descricao, a.cliente_id, a.valor_orcamento, a.despesas, a.data_contato
             FROM atendimentos a
             LEFT JOIN clientes c ON a.cliente_id = c.id
             WHERE a.data_contato = '{date.today()}'
+            ORDER BY a.horario ASC
         """
     df_hoje = pd.read_sql_query(query_hoje, conn)
     conn.close()
 
     if not df_hoje.empty:
+      # Exibe tabela resumida estilo agenda
       st.dataframe(
-          df_hoje.drop(columns=['cliente_id']), use_container_width=True
+          df_hoje[['horario', 'cliente', 'categoria', 'status', 'valor_fechado', 'descricao']].rename(
+              columns={
+                  'horario': 'Horário',
+                  'cliente': 'Cliente',
+                  'categoria': 'Categoria',
+                  'status': 'Status',
+                  'valor_fechado': 'Valor Fechado (R$)',
+                  'descricao': 'Detalhes',
+              }
+          ),
+          use_container_width=True,
+          hide_index=True,
       )
 
       st.divider()
-      st.subheader('✏️ Editar ou 🗑️ Excluir Atendimento de Hoje')
+      st.subheader('✏️ Editar ou 🗑️ Excluir Compromisso da Agenda')
 
       opcoes_hoje = [
-          f"ID {row['id']} - {row['cliente']} ({row['categoria']})"
+          f"ID {row['id']} - às {row['horario']} - {row['cliente']} ({row['categoria']})"
           for _, row in df_hoje.iterrows()
       ]
-      atend_hoje_sel = st.selectbox('Selecione um Atendimento', opcoes_hoje)
+      atend_hoje_sel = st.selectbox('Selecione o Compromisso', opcoes_hoje)
 
       if atend_hoje_sel:
         id_h = int(atend_hoje_sel.split(' ')[1])
@@ -789,15 +855,16 @@ if tela_login():
 
         with tab_edit_h:
           with st.form(f'edit_form_hoje_{id_h}'):
+            hr_eh = st.text_input('Horário', value=str(dados_h['horario'] or '08:00'))
             cat_eh = st.selectbox(
                 'Categoria',
                 CATEGORIAS,
-                index=CATEGORIAS.index(dados_h['categoria']),
+                index=CATEGORIAS.index(dados_h['categoria']) if dados_h['categoria'] in CATEGORIAS else 0,
             )
             stat_eh = st.selectbox(
                 'Status',
                 STATUS_OPCOES,
-                index=STATUS_OPCOES.index(dados_h['status']),
+                index=STATUS_OPCOES.index(dados_h['status']) if dados_h['status'] in STATUS_OPCOES else 0,
             )
             orc_eh = st.number_input(
                 'Valor Orçado', value=float(dados_h['valor_orcamento'])
@@ -805,35 +872,32 @@ if tela_login():
             fec_eh = st.number_input(
                 'Valor Fechado', value=float(dados_h['valor_fechado'])
             )
-            desp_eh = st.number_input(
-                'Despesas', value=float(dados_h['despesas'])
-            )
             desc_eh = st.text_area(
                 'Descrição', value=str(dados_h['descricao'] or '')
             )
 
-            if st.form_submit_button('💾 Atualizar Atendimento'):
+            if st.form_submit_button('💾 Atualizar Compromisso'):
               conn = conectar()
               cursor = conn.cursor()
               cursor.execute(
                   """
                                 UPDATE atendimentos 
-                                SET categoria = ?, status = ?, valor_orcamento = ?, valor_fechado = ?, despesas = ?, descricao = ?
+                                SET horario = ?, categoria = ?, status = ?, valor_orcamento = ?, valor_fechado = ?, descricao = ?
                                 WHERE id = ?
                             """,
                   (
+                      hr_eh,
                       cat_eh,
                       stat_eh,
                       orc_eh,
                       fec_eh,
-                      desp_eh,
                       desc_eh,
                       id_h,
                   ),
               )
               conn.commit()
               conn.close()
-              st.success('Atendimento atualizado com sucesso!')
+              st.success('Compromisso atualizado com sucesso!')
               st.rerun()
 
         with tab_pdf_h:
@@ -848,7 +912,7 @@ if tela_login():
           st.download_button(
               '📥 Baixar Relatório PDF',
               data=pdf_bytes,
-              file_name=f'atendimento_hoje_{id_h}.pdf',
+              file_name=f'compromisso_hoje_{id_h}.pdf',
               mime='application/pdf',
               key=f'pdf_h_{id_h}',
           )
@@ -856,7 +920,7 @@ if tela_login():
         with tab_del_h:
           st.warning(
               '⚠️ Tem certeza de que deseja apagar permanentemente este'
-              ' registro?'
+              ' compromisso?'
           )
           if st.button('🔥 Confirmar Exclusão', key=f'del_hoje_{id_h}'):
             conn = conectar()
@@ -866,10 +930,10 @@ if tela_login():
             )
             conn.commit()
             conn.close()
-            st.success('Registro excluído com sucesso!')
+            st.success('Compromisso excluído com sucesso!')
             st.rerun()
     else:
-      st.info('Nenhum atendimento registrado para a data de hoje.')
+      st.info('Nenhum compromisso agendado para hoje. Utilize o formulário acima para adicionar o primeiro!')
 
   # ----------------------------------------------------
   # GESTÃO DE ATENDIMENTOS (GERAL)
@@ -879,7 +943,7 @@ if tela_login():
 
     conn = conectar()
     query = """
-            SELECT a.id, c.nome as cliente, a.categoria, a.status, a.valor_orcamento, a.valor_fechado, a.despesas, a.data_contato, a.descricao, a.cliente_id
+            SELECT a.id, a.horario, c.nome as cliente, a.categoria, a.status, a.valor_orcamento, a.valor_fechado, a.despesas, a.data_contato, a.descricao, a.cliente_id
             FROM atendimentos a
             LEFT JOIN clientes c ON a.cliente_id = c.id
         """
@@ -895,7 +959,7 @@ if tela_login():
       st.subheader('✏️ Editar ou 🗑️ Excluir Atendimento')
 
       opcoes_atend = [
-          f"ID {row['id']} - {row['cliente']} ({row['categoria']})"
+          f"ID {row['id']} - {row['cliente']} ({row['categoria'])})"
           for _, row in df_atend.iterrows()
       ]
       atend_sel = st.selectbox('Selecione um Atendimento', opcoes_atend)
@@ -910,6 +974,7 @@ if tela_login():
 
         with tab_edit:
           with st.form(f'edit_form_{id_atend}'):
+            hr_edit = st.text_input('Horário', value=str(dados_atend['horario'] or '08:00'))
             cat_edit = st.selectbox(
                 'Categoria',
                 CATEGORIAS,
@@ -939,10 +1004,11 @@ if tela_login():
               cursor.execute(
                   """
                                 UPDATE atendimentos 
-                                SET categoria = ?, status = ?, valor_orcamento = ?, valor_fechado = ?, despesas = ?, descricao = ?
+                                SET horario = ?, categoria = ?, status = ?, valor_orcamento = ?, valor_fechado = ?, despesas = ?, descricao = ?
                                 WHERE id = ?
                             """,
                   (
+                      hr_edit,
                       cat_edit,
                       stat_edit,
                       orc_edit,
