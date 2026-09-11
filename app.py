@@ -137,13 +137,11 @@ def criar_tabelas():
     )
     """)
 
-  # Migração segura para tabela de atendimentos (caso falte a coluna horario)
   cursor.execute("PRAGMA table_info(atendimentos)")
   colunas_atend = [col[1] for col in cursor.fetchall()]
   if 'horario' not in colunas_atend:
     cursor.execute("ALTER TABLE atendimentos ADD COLUMN horario TEXT DEFAULT '08:00'")
 
-  # Tabela de Metas com chave primária em categoria para preservar dados salvos
   cursor.execute("""
     CREATE TABLE IF NOT EXISTS metas (
         categoria TEXT PRIMARY KEY,
@@ -192,7 +190,16 @@ def criar_tabelas():
     )
     """)
 
-  # Garante que as categorias existam na tabela de metas sem sobrescrever valores já salvos pelo usuário
+  # Tabela para a nova aba Navegação e Casa
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS navegacao_casa (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        salario REAL DEFAULT 0.0,
+        escritorio TEXT,
+        armazenamento_casa TEXT
+    )
+    """)
+
   categorias = [
       'Documentação',
       'Pequenos Serviços',
@@ -311,6 +318,7 @@ if tela_login():
           'Novo Atendimento / Orçamento',
           'Atendimentos de Hoje',
           'Gestão de Atendimentos',
+          'Navegação e Casa',
       ],
       'Admin': [
           'Dashboard & Metas',
@@ -323,6 +331,7 @@ if tela_login():
           'Contas a Pagar, Dívidas & Acordos',
           'Registrar Pagamentos',
           'Fluxo de Caixa & DRE',
+          'Navegação e Casa',
           'Gerenciar Usuários',
       ],
   }
@@ -338,7 +347,6 @@ if tela_login():
   if menu == 'Dashboard & Metas':
     st.header('🎯 Painel de Metas e Desempenho Temporal')
 
-    # Carrega as metas atualizadas do banco de dados a cada renderização
     conn = conectar()
     df_atendimentos = pd.read_sql_query('SELECT * FROM atendimentos', conn)
     df_metas = pd.read_sql_query('SELECT * FROM metas', conn)
@@ -1407,6 +1415,48 @@ if tela_login():
         f'R$ {lucro_liquido:,.2f}',
         delta_color='normal' if lucro_liquido >= 0 else 'inverse',
     )
+
+  # ----------------------------------------------------
+  # NAVEGAÇÃO E CASA
+  # ----------------------------------------------------
+  elif menu == 'Navegação e Casa':
+    st.header('🧭 Navegação e Casa')
+    st.markdown('Gerencie as informações de salário, escritório e armazenamento da casa.')
+
+    # Carrega dados salvos anteriormente se houver
+    conn = conectar()
+    df_nav = pd.read_sql_query('SELECT * FROM navegacao_casa', conn)
+    conn.close()
+
+    salario_atual = float(df_nav['salario'].iloc[-1]) if not df_nav.empty and 'salario' in df_nav.columns and len(df_nav) > 0 else 0.0
+    escritorio_atual = str(df_nav['escritorio'].iloc[-1]) if not df_nav.empty and 'escritorio' in df_nav.columns and len(df_nav) > 0 and pd.notna(df_nav['escritorio'].iloc[-1]) else ''
+    armazenamento_atual = str(df_nav['armazenamento_casa'].iloc[-1]) if not df_nav.empty and 'armazenamento_casa' in df_nav.columns and len(df_nav) > 0 and pd.notna(df_nav['armazenamento_casa'].iloc[-1]) else ''
+
+    with st.form('form_navegacao_casa'):
+      novo_salario = st.number_input('Salário (R$)', min_value=0.0, step=100.0, value=salario_atual)
+      novo_escritorio = st.text_area('Escritório', value=escritorio_atual)
+      novo_armazenamento = st.text_area('Armazenamento Casa', value=armazenamento_atual)
+
+      if st.form_submit_button('💾 Salvar Informações'):
+        conn = conectar()
+        cursor = conn.cursor()
+        # Salva um novo registro ou atualiza (aqui inserimos novo estado para histórico ou mantemos atualizado)
+        cursor.execute(
+            """
+                INSERT INTO navegacao_casa (salario, escritorio, armazenamento_casa)
+                VALUES (?, ?, ?)
+            """,
+            (novo_salario, novo_escritorio, novo_armazenamento),
+        )
+        conn.commit()
+        conn.close()
+        st.success('Informações de Navegação e Casa salvas com sucesso!')
+        st.rerun()
+
+    if not df_nav.empty:
+      st.divider()
+      st.subheader('📋 Histórico / Registros Salvos')
+      st.dataframe(df_nav, use_container_width=True, hide_index=True)
 
   # ----------------------------------------------------
   # GERENCIAR USUÁRIOS
